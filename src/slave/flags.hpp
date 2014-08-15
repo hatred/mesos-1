@@ -277,7 +277,7 @@ public:
         "'docker' (on Linux). The order the containerizers\n"
         "are specified is the order they are tried\n"
         "(--containerizers=mesos).\n",
-        "mesos");
+        "docker,mesos");
 
     add(&Flags::default_container_image,
         "default_container_image",
