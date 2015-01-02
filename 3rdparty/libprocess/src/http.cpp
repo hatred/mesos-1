@@ -10,6 +10,7 @@
 
 #include <process/future.hpp>
 #include <process/http.hpp>
+#include <process/network.hpp>
 #include <process/owned.hpp>
 #include <process/socket.hpp>
 
@@ -147,14 +148,14 @@ Future<Response> request(
   } else if (url.domain.isNone()) {
     return Failure("Missing URL domain or IP");
   } else {
-    Try<uint32_t> ip = net::getIP(url.domain.get(), AF_INET);
+    Try<vector<Address>> addresses = network::resolve(url.domain.get());
 
-    if (ip.isError()) {
+    if (addresses.isError()) {
       return Failure("Failed to determine IP of domain '" +
-                     url.domain.get() + "': " + ip.error());
+                     url.domain.get() + "': " + addresses.error());
     }
 
-    address.ip = ip.get();
+    address.ip = addresses.get().front().ip;
   }
 
   address.port = url.port;

@@ -10,9 +10,11 @@
 
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include <boost/unordered_map.hpp>
 
+#include <process/network.hpp>
 #include <process/pid.hpp>
 #include <process/process.hpp>
 
@@ -26,7 +28,9 @@ using std::istream;
 using std::ostream;
 using std::size_t;
 using std::string;
+using std::vector;
 
+using process::network::Address;
 
 namespace process {
 
@@ -88,7 +92,7 @@ istream& operator >> (istream& stream, UPID& pid)
 
   string id;
   string host;
-  network::Address address;
+  Address address;
 
   size_t index = str.find('@');
 
@@ -110,16 +114,15 @@ istream& operator >> (istream& stream, UPID& pid)
     return stream;
   }
 
-  //TODO(evelinad): Extend this to support IPv6
-  Try<uint32_t> ip = net::getIP(host, AF_INET);
+  Try<vector<Address>> addresses = network::resolve(host);
 
-  if (ip.isError()) {
-    VLOG(2) << ip.error();
+  if (addresses.isError()) {
+    VLOG(2) << addresses.error();
     stream.setstate(std::ios_base::badbit);
     return stream;
   }
 
-  address.ip = ip.get();
+  address.ip = addresses.get().front().ip;
 
   str = str.substr(index + 1);
 

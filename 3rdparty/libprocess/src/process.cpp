@@ -55,6 +55,7 @@
 #include <process/io.hpp>
 #include <process/logging.hpp>
 #include <process/mime.hpp>
+#include <process/network.hpp>
 #include <process/process.hpp>
 #include <process/profiler.hpp>
 #include <process/socket.hpp>
@@ -883,13 +884,13 @@ void initialize(const string& delegate)
     }
 
     // Lookup IP address of local hostname.
-    Try<uint32_t> ip = net::getIP(hostname, AF_INET);
+    Try<vector<Address>> addresses = network::resolve(hostname);
 
-    if (ip.isError()) {
-      LOG(FATAL) << ip.error();
+    if (addresses.isError()) {
+      LOG(FATAL) << "Failed to resolve hostname: " << addresses.error();
     }
 
-    __address__.ip = ip.get();
+    __address__.ip = addresses.get().front().ip;
   }
 
   Try<Nothing> listen = __s__->listen(LISTEN_BACKLOG);
