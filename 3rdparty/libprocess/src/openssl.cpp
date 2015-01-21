@@ -175,7 +175,7 @@ int verify_callback(int ok, X509_STORE_CTX* store)
 
     message += "Error with certificate at depth: " + stringify(depth) + "\n";
 
-    constexpr size_t size = 256;
+    const size_t size = 256;
     char buffer[size];
 
     // TODO(jmlvanre): use X509_NAME_print_ex instead.
