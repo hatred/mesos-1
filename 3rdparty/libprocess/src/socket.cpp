@@ -16,6 +16,11 @@ using std::string;
 namespace process {
 namespace network {
 
+// Forward declarations.
+Try<std::shared_ptr<Socket::Impl>> pollSocket(int s);
+Try<std::shared_ptr<Socket::Impl>> libeventSSLSocket(int s);
+
+
 Try<Socket> Socket::create(Kind kind, int s)
 {
   if (s < 0) {
@@ -55,9 +60,31 @@ Try<Socket> Socket::create(Kind kind, int s)
       }
       return Socket(socket.get());
     }
+    case SSL: {
+#ifdef USE_SSL_SOCKET
+      Try<std::shared_ptr<Socket::Impl>> socket = libeventSSLSocket(s);
+      if (socket.isError()) {
+        return Error(socket.error());
+      }
+      return Socket(socket.get());
+#else
+      return
+        Error("SSL socket is only supported with libevent ssl configuration");
+#endif
+    }
     // By not setting a default we leverage the compiler errors when
     // the enumeration is augmented to find all the cases we need to
     // provide.
+  }
+}
+
+
+Socket::Kind getDefaultSocketKind() {
+  const char* env = getenv("USE_SSL");
+  if (env != NULL && strcmp(env, "1") == 0) {
+    return Socket::SSL;
+  } else {
+    return Socket::POLL;
   }
 }
 
@@ -66,7 +93,7 @@ const Socket::Kind& Socket::DEFAULT_KIND()
 {
   // TODO(jmlvanre): Change the default based on configure or
   // environment flags.
-  static const Kind DEFAULT = POLL;
+  static const Kind DEFAULT = getDefaultSocketKind();
   return DEFAULT;
 }
 

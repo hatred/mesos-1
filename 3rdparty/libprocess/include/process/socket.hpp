@@ -25,7 +25,7 @@ public:
   // Available kinds of implementations.
   enum Kind {
     POLL,
-    // TODO(jmlvanre): Add libevent SSL socket.
+    SSL
   };
 
   // Returns an instance of a Socket using the specified kind of
@@ -94,11 +94,22 @@ public:
     // enabling reuse of a pool of preallocated strings/buffers.
     virtual Future<Nothing> send(const std::string& data);
 
+    virtual void shutdown()
+    {
+      ::shutdown(s, SHUT_RD);
+    }
+
   protected:
     explicit Impl(int _s) : s(_s) { CHECK(s >= 0); }
 
     // Construct a Socket wrapper from this implementation.
     Socket socket() { return Socket(shared_from_this()); }
+
+    // Construct a new Socket from the given impl. This is a proxy
+    // function, as Impls derived from this won't have access to the
+    // Socket::Socket(...) constructors.
+    Socket socket(std::shared_ptr<Impl>&& that) { return Socket(that); }
+    Socket socket(const std::shared_ptr<Impl>& that) { return Socket(that); }
 
     int s;
   };
@@ -166,6 +177,11 @@ public:
   Future<Nothing> send(const std::string& data)
   {
     return impl->send(data);
+  }
+
+  void shutdown()
+  {
+    impl->shutdown();
   }
 
 private:

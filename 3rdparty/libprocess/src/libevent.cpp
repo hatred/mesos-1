@@ -13,9 +13,61 @@ namespace process {
 
 struct event_base* base = NULL;
 
+static synchronizable(functions) = SYNCHRONIZED_INITIALIZER;
+std::queue<lambda::function<void(void)>> async_functions;
+
+// Per thread bool pointer. The extra level of indirection from
+// _in_event_loop_ to __in_event_loop__ is used in order to take
+// advantage of the ThreadLocal operators without needing the extra
+// dereference as well as lazily construct the actual bool.
+ThreadLocal<bool>* _in_event_loop_ = new ThreadLocal<bool>();
+
+#define __in_event_loop__ *(*_in_event_loop_ == NULL ?               \
+  *_in_event_loop_ = new bool(false) : *_in_event_loop_)
+
+
+void async_function(int sock, short which, void *arg)
+{
+  struct event* ev = reinterpret_cast<struct event*>(arg);
+  event_free(ev);
+
+  std::queue<lambda::function<void(void)>> q;
+  {
+    synchronized (functions) {
+      std::swap(q, async_functions);
+    }
+  }
+  while (!q.empty()) {
+    q.front()();
+    q.pop();
+  }
+}
+
+
+void run_in_event_loop(const lambda::function<void(void)>& f)
+{
+  if (__in_event_loop__) {
+    f();
+  } else {
+    synchronized (functions) {
+      async_functions.push(f);
+      // Add an event and activate it to interrupt the event loop.
+      // TODO(jmlvanre): after libevent v 2.1 we can use
+      // event_self_cbarg instead of re-assigning the event. For now
+      // we manually re-assign the event to pass in the pointer to the
+      // event itself as the callback argument.
+      struct event* ev = evtimer_new(base, async_function, NULL);
+      event_assign(ev, base, -1, 0, async_function, ev);
+      event_active(ev, EV_TIMEOUT, 0);
+    }
+  }
+}
+
 
 void* EventLoop::run(void*)
 {
+  __in_event_loop__ = true;
+
   do {
     int result = event_base_loop(base, EVLOOP_ONCE);
     if (result < 0) {
@@ -29,6 +81,9 @@ void* EventLoop::run(void*)
       break;
     }
   } while (true);
+
+  __in_event_loop__ = false;
+
   return NULL;
 }
 
