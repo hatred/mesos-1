@@ -76,6 +76,12 @@ AC_ARG_ENABLE([libevent],
                              [use libevent instead of libev default: no]),
               [enable_libevent=yes], [])
 
+AC_ARG_ENABLE([ssl],
+              AS_HELP_STRING([--enable-ssl],
+                             [use ssl for libprocess communication
+                             default: no]),
+              [enable_ssl=yes], [])
+
 AC_ARG_WITH([boost],
             AS_HELP_STRING([--with-boost@<:@=DIR@:>@],
                            [excludes building and using the bundled Boost
@@ -572,6 +578,9 @@ fi
 
 AM_CONDITIONAL([ENABLE_LIBEVENT], [test x"$enable_libevent" = "xyes"])
 
+AM_CONDITIONAL([ENABLE_SSL],
+               [test x"$enable_ssl" = "xyes"])
+
 if test "x$enable_libevent" = "xyes"; then
   AC_CHECK_HEADERS([event2/event.h],
                    [AC_CHECK_LIB([event],
@@ -604,6 +613,50 @@ libevent_pthreads is required for mesos to build.
 libevent_pthreads is required for mesos to build.
 -------------------------------------------------------------------
   ])])
+fi
+
+if test "x$enable_ssl" = "xyes"; then
+  AC_CHECK_HEADERS([openssl/ssl.h],
+                   [AC_CHECK_LIB([ssl],
+                                 [SSL_CTX_new],
+                                 [],
+                                 [AC_MSG_ERROR([cannot find libssl
+-------------------------------------------------------------------
+libssl is required for ssl-enabled mesos to build.
+-------------------------------------------------------------------
+                          ])])], [AC_MSG_ERROR([cannot find libssl headers
+-------------------------------------------------------------------
+libssl is required for ssl-enabled mesos to build.
+-------------------------------------------------------------------
+  ])])
+
+  AC_CHECK_LIB([crypto], [RAND_poll], [], [AC_MSG_ERROR([cannot find libcrypto
+-------------------------------------------------------------------
+libcrypto is required for ssl-enabled mesos to build.
+-------------------------------------------------------------------
+                          ])])
+
+  if test "x$enable_libevent" = "xyes"; then
+    AC_CHECK_HEADERS([event2/bufferevent_ssl.h],
+                     [AC_CHECK_LIB([event_openssl],
+                                   [bufferevent_openssl_get_ssl],
+                                   [],
+                                   [AC_MSG_ERROR([cannot find libevent_openssl
+-------------------------------------------------------------------
+libevent_openssl is required for ssl-enabled mesos to build.
+-------------------------------------------------------------------
+                            ])],
+                                   [-levent])],
+                                   [AC_MSG_ERROR([cannot find libevent_openssl headers
+-------------------------------------------------------------------
+libevent_openssl is required for ssl-enabled mesos to build.
+-------------------------------------------------------------------
+    ])])
+
+  else
+    AC_MSG_ERROR([SSL is currently only supported with libevent])
+  fi
+  AC_DEFINE([USE_SSL_SOCKET], [1])
 fi
 
 AS_IF([test "x${ac_cv_env_CFLAGS_set}" = "x"],
