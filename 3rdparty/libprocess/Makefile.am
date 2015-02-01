@@ -29,27 +29,27 @@ PICOJSON = 3rdparty/picojson-$(PICOJSON_VERSION)
 # arguments, see configure.ac).
 noinst_LTLIBRARIES = libprocess.la
 
-libprocess_la_SOURCES =		\
-  src/clock.cpp			\
-  src/config.hpp		\
-  src/decoder.hpp		\
-  src/encoder.hpp		\
-  src/event_loop.hpp		\
-  src/gate.hpp			\
-  src/help.cpp			\
-  src/http.cpp			\
-  src/io.cpp			\
-  src/latch.cpp			\
-  src/metrics/metrics.cpp	\
-  src/pid.cpp			\
-  src/poll_socket.cpp		\
-  src/poll_socket.hpp		\
-  src/process.cpp		\
-  src/process_reference.hpp	\
-  src/reap.cpp			\
-  src/socket.cpp		\
-  src/subprocess.cpp		\
-  src/synchronized.hpp		\
+libprocess_la_SOURCES =			\
+  src/clock.cpp				\
+  src/config.hpp			\
+  src/decoder.hpp			\
+  src/encoder.hpp			\
+  src/event_loop.hpp			\
+  src/gate.hpp				\
+  src/help.cpp				\
+  src/http.cpp				\
+  src/io.cpp				\
+  src/latch.cpp				\
+  src/metrics/metrics.cpp		\
+  src/pid.cpp				\
+  src/poll_socket.cpp			\
+  src/poll_socket.hpp			\
+  src/process.cpp			\
+  src/process_reference.hpp		\
+  src/reap.cpp				\
+  src/socket.cpp			\
+  src/subprocess.cpp			\
+  src/synchronized.hpp			\
   src/timeseries.cpp
 
 if ENABLE_LIBEVENT
@@ -63,9 +63,9 @@ endif
 endif
 
 if ENABLE_SSL
-libprocess_la_SOURCES +=	\
-    src/libevent_ssl_socket.cpp	\
-    src/openssl.cpp		\
+libprocess_la_SOURCES +=		\
+    src/libevent_ssl_socket.cpp		\
+    src/openssl.cpp			\
     src/openssl.hpp
 EVENT_LIB += -levent_openssl -lssl -lcrypto
 endif
@@ -79,14 +79,14 @@ libprocess_la_CPPFLAGS =		\
   $(AM_CPPFLAGS)
 
 if ENABLE_LIBEVENT
-libprocess_la_SOURCES +=	\
-    src/libevent.hpp		\
-    src/libevent.cpp		\
+libprocess_la_SOURCES +=		\
+    src/libevent.hpp			\
+    src/libevent.cpp			\
     src/libevent_poll.cpp
 else
-  libprocess_la_SOURCES +=	\
-    src/libev.hpp		\
-    src/libev.cpp		\
+  libprocess_la_SOURCES +=		\
+    src/libev.hpp			\
+    src/libev.cpp			\
     src/libev_poll.cpp
 endif
 
@@ -119,25 +119,25 @@ endif
 # Tests.
 check_PROGRAMS = tests benchmarks
 
-tests_SOURCES =							\
-  src/tests/decoder_tests.cpp					\
-  src/tests/encoder_tests.cpp					\
-  src/tests/http_tests.cpp					\
-  src/tests/io_tests.cpp					\
-  src/tests/limiter_tests.cpp					\
-  src/tests/main.cpp						\
-  src/tests/mutex_tests.cpp					\
-  src/tests/metrics_tests.cpp					\
-  src/tests/owned_tests.cpp					\
-  src/tests/process_tests.cpp					\
-  src/tests/queue_tests.cpp					\
-  src/tests/reap_tests.cpp					\
-  src/tests/sequence_tests.cpp					\
-  src/tests/shared_tests.cpp					\
-  src/tests/statistics_tests.cpp				\
-  src/tests/subprocess_tests.cpp				\
-  src/tests/system_tests.cpp					\
-  src/tests/timeseries_tests.cpp				\
+tests_SOURCES =				\
+  src/tests/decoder_tests.cpp		\
+  src/tests/encoder_tests.cpp		\
+  src/tests/http_tests.cpp		\
+  src/tests/io_tests.cpp		\
+  src/tests/limiter_tests.cpp		\
+  src/tests/main.cpp			\
+  src/tests/mutex_tests.cpp		\
+  src/tests/metrics_tests.cpp		\
+  src/tests/owned_tests.cpp		\
+  src/tests/process_tests.cpp		\
+  src/tests/queue_tests.cpp		\
+  src/tests/reap_tests.cpp		\
+  src/tests/sequence_tests.cpp		\
+  src/tests/shared_tests.cpp		\
+  src/tests/statistics_tests.cpp	\
+  src/tests/subprocess_tests.cpp	\
+  src/tests/system_tests.cpp		\
+  src/tests/timeseries_tests.cpp	\
   src/tests/time_tests.cpp
 
 tests_CPPFLAGS =			\
