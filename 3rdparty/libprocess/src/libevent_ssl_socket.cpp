@@ -16,29 +16,33 @@
 #include "openssl.hpp"
 
 // Locking:
+//
 // We use the BEV_OPT_THREADSAFE flag when constructing bufferevents
 // so that all bufferevent specific functions run from within the
 // event loop will have the lock on the bufferevent already acquired.
 // This means that everywhere else we need to manually call
-// 'bufferevent_lock(bev)' and 'bufferevent_unlock(bev)'; However, due
-// to a deadlock scneario in libevent-openssl (v 2.0.21) we currently
+// 'bufferevent_lock(bev)' and 'bufferevent_unlock(bev)'. However, due
+// to a deadlock scenario in libevent-openssl (v 2.0.21) we currently
 // modify bufferevents using continuations in the event loop. See
 // 'Continuation' comment below.
 
 // Continuation:
+//
 // There is a deadlock scenario in libevent-openssl (v 2.0.21) when
 // modifying the bufferevent (bev) from another thread (not the event
 // loop). To avoid this we run all bufferevent manipulation logic in
 // continuations that are executed within the event loop.
 
-// Connection Extra FD:
+// Connecting Extra File Descriptor:
+//
 // In libevent-openssl (v 2.0.21) we've had issues using the
 // 'bufferevent_openssl_socket_new' call with the CONNECTING state and
-// an existing socket. Therefore we allow it to construct its own
-// fd and clean it up along with the Impl object when the bev is
-// freed using the BEV_OPT_CLOSE_ON_FREE option.
+// an existing socket. Therefore we allow it to construct its own file
+// descriptor and clean it up along with the Impl object when the
+// 'bev' is freed using the BEV_OPT_CLOSE_ON_FREE option.
 
 // Socket KeepAlive:
+//
 // We want to make sure that sockets don't get destroyed while there
 // are still requests pending on them. If they did, then the
 // continuation functions for those requests would be acting on bad
@@ -60,85 +64,43 @@ class LibeventSSLSocketImpl : public Socket::Impl
 public:
   LibeventSSLSocketImpl(int _s, AcceptRequest* request = NULL);
 
-  virtual ~LibeventSSLSocketImpl()
-  {
-    if (bev  != NULL) {
-      SSL* ssl = bufferevent_openssl_get_ssl(bev);
-      // Workaround for SSL shutdown, see http://www.wangafu.net/~nickm/libevent-book/Ref6a_advanced_bufferevents.html // NOLINT
-      SSL_set_shutdown(ssl, SSL_RECEIVED_SHUTDOWN);
-      SSL_shutdown(ssl);
-      bufferevent_disable(bev, EV_READ | EV_WRITE);
+  virtual ~LibeventSSLSocketImpl();
 
-      // For the connecting socket BEV_OPT_CLOSE_ON_FREE will close
-      // the fd. See note below.
-      bufferevent_free(bev);
-
-      // Since we are using a separate fd for the connecting socket we
-      // end up using BEV_OPT_CLOSE_ON_FREE for the connecting, but
-      // not for the accepting side. since the BEV_OPT_CLOSE_ON_FREE
-      // also frees the SSL object, we need to manually free it for
-      // the accepting case. See the 'Connection Extra FD' note at top
-      // of file.
-      if (freeSSLCtx) {
-        SSL_free(ssl);
-      }
-    }
-    if (listener != NULL) {
-      evconnlistener_free(listener);
-    }
-  }
-
+  // Socket::Impl implementation.
   virtual Future<Nothing> connect(const Address& address);
-
   virtual Future<size_t> recv(char* data, size_t size);
-
   virtual Future<size_t> send(const char* data, size_t size);
-
   virtual Future<size_t> sendfile(int fd, off_t offset, size_t size);
-
   virtual Try<Nothing> listen(int backlog);
-
   virtual Future<Socket> accept();
-
   virtual void shutdown();
 
 private:
   struct RecvRequest
   {
-    RecvRequest(char* _data, size_t _size, Socket&& _socket)
-      : data(_data), size(_size), socket(std::move(_socket)) {}
+    RecvRequest(char* _data, size_t _size) : data(_data), size(_size) {}
     Promise<size_t> promise;
     char* data;
     size_t size;
-    // Keep alive until the request is handled or discarded. See
-    // 'Socket KeepAlive' note at top of file.
-    Socket socket;
   };
 
   struct SendRequest
   {
-    SendRequest(size_t _size, Socket&& _socket)
-      : size(_size), socket(std::move(_socket)) {}
+    SendRequest(size_t _size) : size(_size) {}
     Promise<size_t> promise;
     size_t size;
-    // Keep alive until the request is handled or discarded. See
-    // 'Socket KeepAlive' note at top of file.
-    Socket socket;
   };
 
   struct ConnectRequest
   {
-    ConnectRequest(Socket&& _socket) : socket(std::move(_socket)) {}
+    ConnectRequest() {}
     Promise<Nothing> promise;
-    // Keep alive until the request is handled or discarded. See
-    // 'Socket KeepAlive' note at top of file.
-    Socket socket;
   };
 
   struct AcceptRequest
   {
-    AcceptRequest(Socket&& _accepting_socket)
-      : acceptingSocket(std::move(_accepting_socket)),
+    AcceptRequest(Socket&& _acceptingSocket)
+      : acceptingSocket(std::move(_acceptingSocket)),
         self(NULL),
         bev(NULL),
         acceptedSocket(NULL),
@@ -155,42 +117,37 @@ private:
     int sa_len;
   };
 
+  // Continuations.
   void _shutdown();
-
   void _recv(size_t size);
-
   void _send(const char* data, size_t size);
-
   void _sendfile(int fd, off_t offset, size_t size);
-
   void _accept();
 
+  // Callbacks set with libevent.
   static void recvCallback(struct bufferevent* bev, void* arg);
-
   static void sendCallback(struct bufferevent* bev, void* arg);
-
   static void eventCallback(struct bufferevent* bev, short events, void* arg);
-
-  void _discardRecv(RecvRequest* request);
-  void discardRecv(RecvRequest* request);
-
-  void _discardSend(SendRequest* request);
-  void discardSend(SendRequest* request);
-
-  void _discardConnect(ConnectRequest* request);
-  void discardConnect(ConnectRequest* request);
-
-  void doAccept(
-    int sock,
-    struct sockaddr* sa,
-    int sa_len);
-
   static void acceptCallback(
     struct evconnlistener* listener,
     int sock,
     struct sockaddr* sa,
     int sa_len,
     void* arg);
+
+  void discardRecv(RecvRequest* request);
+  void _discardRecv(RecvRequest* request);
+
+  void discardSend(SendRequest* request);
+  void _discardSend(SendRequest* request);
+
+  void discardConnect(ConnectRequest* request);
+  void _discardConnect(ConnectRequest* request);
+
+  void doAccept(
+    int sock,
+    struct sockaddr* sa,
+    int sa_len);
 
   struct bufferevent* bev;
 
@@ -203,7 +160,8 @@ private:
   ConnectRequest* connectRequest;
   AcceptRequest* acceptRequest;
 
-  struct PendingAccept {
+  struct PendingAccept
+  {
     int sock;
     struct sockaddr* sa;
     int sa_len;
@@ -214,8 +172,11 @@ private:
   // accessed from within the event loop.
   queue<PendingAccept> pendingAccepts;
 
+  // Whether or not this socket came from an 'accept' and we need to
+  // explicitly free the SSL context.
   bool freeSSLCtx;
 
+  // Hostname of the peer that we connected to or we accepted.
   Option<string> peerHostname;
 };
 
@@ -227,234 +188,262 @@ Try<std::shared_ptr<Socket::Impl>> libeventSSLSocket(int s)
 }
 
 
-namespace internal {
-
 template <typename Request, typename Value>
-void satisfyRequest(Request* request, const Value& value)
+static void satisfy(std::shared_ptr<Request> request, const Value& value)
 {
-  CHECK_NOTNULL(request);
-  if (request->promise.future().hasDiscard()) {
-    request->promise.discard();
-  } else {
-    request->promise.set(value);
-  }
+  request->promise.set(value);
 
-  delete request;
+  // Since we swapped 'request' with an empty std::shared_ptr we
+  // should not have raced with the 'onDiscard' callback we set up
+  // (see ...) since the 'onDiscard' callback should have decided that
+  // we're no longer servicing this request and thus this future
+  // should be ready.
+  CHECK_READY(request->promise.future());
 }
+
 
 template <typename Request>
-void failRequest(Request* request, const string& error)
+static void fail(std::shared_ptr<Request> request, const string& message)
 {
-  CHECK_NOTNULL(request);
-  if (request->promise.future().hasDiscard()) {
-    request->promise.discard();
-  } else {
-    request->promise.fail(error);
-  }
+  request->promise.fail(message);
 
-  delete request;
-}
-
-} // namespace internal {
-
-
-// This function runs in the event loop. It is a continuation of
-// 'shutdown'. See 'Continuation' note at top of file.
-void LibeventSSLSocketImpl::_shutdown()
-{
-  CHECK_NOTNULL(bev);
-
-  bufferevent_lock(bev);
-  { // Bev locking scope.
-    RecvRequest* request = NULL;
-
-    // Swap the recvRequest under the object lock.
-    synchronized (this) {
-      std::swap(request, recvRequest);
-    }
-
-    // If there is still a pending receive request then close it.
-    if (request != NULL) {
-      internal::satisfyRequest(request, 0);
-    }
-  } // End bev locking scope.
-  bufferevent_unlock(bev);
-}
-
-
-void LibeventSSLSocketImpl::shutdown()
-{
-  run_in_event_loop(lambda::bind(&LibeventSSLSocketImpl::_shutdown, this));
+  // Since we swapped 'request' with an empty std::shared_ptr we
+  // should not have raced with the 'onDiscard' callback we set up
+  // (see ...) since the 'onDiscard' callback should have decided that
+  // we're no longer servicing this request and thus this future
+  // should be failed.
+  CHECK_FAILED(request->promise.future());
 }
 
 
 // This callback is run within the event loop. No locks required. See
 // 'Locking' note at top of file.
-void LibeventSSLSocketImpl::recvCallback(struct bufferevent* bev, void* arg)
+void readCallback(struct bufferevent* bev, void* arg)
 {
-  LibeventSSLSocketImpl* impl =
-    reinterpret_cast<LibeventSSLSocketImpl*>(CHECK_NOTNULL(arg));
+  CHECK(__in_event_loop__);
 
-  RecvRequest* request = NULL;
-  // Manually construct the lock as the macro does not work for
-  // acquiring it from another instance.
-  if (Synchronized __synchronizedthis =
-      Synchronized(&(impl->__synchronizable_this))) {
-    std::swap(request, impl->recvRequest);
+  std::weak_ptr<LibeventSSLSocketImpl>* weak =
+    reinterpret_cast<std::weak_ptr<LibeventSSLSocketImpl>*>(CHECK_NOTNULL(arg));
+
+  std::shared_ptr<LibeventSSLSocketImpl> impl(weak->lock());
+
+  if (impl) {
+    impl->readCallback();
+  }
+}
+
+
+void LibeventSSLSocketImpl::readCallback()
+{
+  CHECK(__in_event_loop__);
+
+  std::shared_ptr<RecvRequest> request(NULL);
+
+  // TODO(benh): Optimize with 'std::shared_ptr::atomic_exchange'.
+  synchronized (this) {
+    request.swap(recvRequest);
   }
 
-  if (request != NULL) {
+  if (request) {
     bufferevent_disable(bev, EV_READ);
-    internal::satisfyRequest(
-        request,
-        bufferevent_read(bev, request->data, request->size));
+
+    size_t size = bufferevent_read(bev, request->data, request->size);
+
+    // TODO(benh): With a low-water mark at 0 is it possible that
+    // we'll read nothing from the buffer? For example, if there is a
+    // "spurious" read will that cause us to invoke this callback but
+    // not actually have any data? Also, what if bufferevent_read
+    // actually fails and returns -1!?
+    CHECK(size != 0);
+
+    request->promise.set(value);
+
+    // Since we swapped 'request' with an empty std::shared_ptr we
+    // should not have raced with the 'onDiscard' callback we set up
+    // in LibeventSSLSocketImpl::recv since the 'onDiscard' callback
+    // should have decided that we're no longer servicing this
+    // request. Thus this future should be ready.
+    CHECK_READY(request->promise.future());
+
+    // TODO(benh): Is it possible that there is more data leftover in
+    // the bufferevent? Could this happen for example because a 'recv'
+    // was discarded but not before libevent went and pulled that data
+    // into the buffer?
   }
 }
 
+
 // This callback is run within the event loop. No locks required. See
 // 'Locking' note at top of file.
-void LibeventSSLSocketImpl::sendCallback(struct bufferevent* bev, void* arg)
+void writeCallback(struct bufferevent* bev, void* arg)
 {
-  LibeventSSLSocketImpl* impl =
-    reinterpret_cast<LibeventSSLSocketImpl*>(CHECK_NOTNULL(arg));
+  CHECK(__in_event_loop__);
 
-  SendRequest* request = NULL;
-  // Manually construct the lock as the macro does not work for
-  // acquiring it from another instance.
-  if (Synchronized __synchronizedthis =
-      Synchronized(&(impl->__synchronizable_this))) {
-    std::swap(request, impl->sendRequest);
-  }
+  std::weak_ptr<LibeventSSLSocketImpl>* weak =
+    reinterpret_cast<std::weak_ptr<LibeventSSLSocketImpl>*>(CHECK_NOTNULL(arg));
 
-  if (request != NULL) {
-    internal::satisfyRequest(request, request->size);
+  std::shared_ptr<LibeventSSLSocketImpl> impl(weak->lock());
+
+  if (impl) {
+    impl->writeCallback();
   }
 }
 
+
+void LibeventSSLSocketImpl::writeCallback()
+{
+  CHECK(__in_event_loop__);
+
+  std::shared_ptr<SendRequest> request(NULL);
+
+  // TODO(benh): Optimize with 'std::shared_ptr::atomic_exchange'.
+  synchronized (this) {
+    request.swap(sendRequest);
+  }
+
+  CHECK(request)
+    << "Not expecting a write callback without doing 'send' or 'sendfile'";
+
+  request->promise.set(request->size);
+}
+
+
 // This callback is run within the event loop. No locks required. See
 // 'Locking' note at top of file.
-void LibeventSSLSocketImpl::eventCallback(
+void eventCallback(
     struct bufferevent* bev,
     short events,
     void* arg)
 {
-  LibeventSSLSocketImpl* impl =
-    reinterpret_cast<LibeventSSLSocketImpl*>(CHECK_NOTNULL(arg));
+  CHECK(__in_event_loop__);
 
-  RecvRequest* currentRecvRequest = NULL;
-  SendRequest* currentSendRequest = NULL;
-  ConnectRequest* currentConnectRequest = NULL;
-  AcceptRequest* currentAcceptRequest = NULL;
+  std::weak_ptr<LibeventSSLSocketImpl>* weak =
+    reinterpret_cast<std::weak_ptr<LibeventSSLSocketImpl>*>(CHECK_NOTNULL(arg));
+
+  std::shared_ptr<LibeventSSLSocketImpl> impl(weak->lock());
+
+  if (impl) {
+    impl->eventCallback(events);
+  }
+}
+
+
+void LibeventSSLSocketImpl::eventCallback(short events)
+{
+  CHECK(__in_event_loop__);
+
+  shared_ptr<RecvRequest> currentRecvRequest(NULL);
+  shared_ptr<SendRequest> currentSendRequest(NULL);
+  shared_ptr<ConnectRequest> currentConnectRequest(NULL);
+  shared_ptr<AcceptRequest> currentAcceptRequest(NULL);
+
   // In all of the following conditions, we're interested in swapping
   // the value of the requests with null (if they are already null,
   // then there's no harm).
   if (events & BEV_EVENT_EOF ||
       events & BEV_EVENT_CONNECTED ||
       (events & BEV_EVENT_ERROR && EVUTIL_SOCKET_ERROR() != 0)) {
-    // Manually construct the lock as the macro does not work for
-    // acquiring it from another instance.
-    if (Synchronized __synchronizedthis =
-        Synchronized(&(impl->__synchronizable_this))) {
-      std::swap(currentRecvRequest, impl->recvRequest);
-      std::swap(currentSendRequest, impl->sendRequest);
-      std::swap(currentConnectRequest, impl->connectRequest);
-      std::swap(currentAcceptRequest, impl->acceptRequest);
+    synchronized (this) {
+      currentRecvRequest.swap(recvRequest);
+      currentSendRequest.swap(sendRequest);
+      currentConnectRequest.swap(connectRequest);
+      currentAcceptRequest.swap(acceptRequest);
     }
   }
 
-  // If a request below is null, then no such request is in progress,
+  // If a request below is empty then no such request is in progress,
   // either because it was never created, it has already been
   // completed, or it has been discarded.
 
   if (events & BEV_EVENT_EOF) {
     // At end of file, close the connection.
-    if (currentRecvRequest != NULL) {
-      internal::satisfyRequest(currentRecvRequest, 0);
+    if (currentRecvRequest) {
+      satisfy(currentRecvRequest, 0);
     }
-    if (currentSendRequest != NULL) {
-      internal::satisfyRequest(currentSendRequest, 0);
+
+    if (currentSendRequest) {
+      satisfy(currentSendRequest, 0);
     }
-    if (currentConnectRequest != NULL) {
-      internal::failRequest(
-          currentConnectRequest,
-          "Failed connect: connection closed");
+
+    if (currentConnectRequest) {
+      fail(currentConnectRequest, "Failed connect: connection closed");
     }
-    if (currentAcceptRequest != NULL) {
-      internal::failRequest(
-          currentAcceptRequest,
-          "Failed accept: connection closed");
+
+    if (currentAcceptRequest) {
+      fail(currentAcceptRequest, "Failed accept: connection closed");
     }
   } else if (events & BEV_EVENT_ERROR && EVUTIL_SOCKET_ERROR() != 0) {
-    // If there is a valid error, fail any requests and log the error.
-    VLOG(1) << "Socket error: "
-            << stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
-    if (currentRecvRequest != NULL) {
-      internal::failRequest(
-          currentRecvRequest,
-          "Failed recv, connection error: " +
-          stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())));
+    // If there is an error, fail any requests and log the error message.
+    const string message =
+      stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
+
+    VLOG(1) << "Socket error: " << message;
+
+    if (currentRecvRequest) {
+      fail(currentRecvRequest, "Failed recv, connection error: " + message);
     }
-    if (currentSendRequest != NULL) {
-      internal::failRequest(
-          currentSendRequest,
-          "Failed send, connection error: " +
-          stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())));
+
+    if (currentSendRequest) {
+      fail(currentSendRequest, "Failed send, connection error: " + message);
     }
-    if (currentConnectRequest != NULL) {
-      internal::failRequest(
-          currentConnectRequest,
-          "Failed connect, connection error: " +
-          stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())));
+
+    if (currentConnectRequest) {
+      fail(currentConnectRequest,
+           "Failed connect, connection error: " + message);
     }
-    if (currentAcceptRequest != NULL) {
-      internal::failRequest(
-          currentAcceptRequest,
-          "Failed accept: connection error: " +
-          stringify(evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())));
+
+    if (currentAcceptRequest) {
+      fail(currentAcceptRequest, "Failed accept: connection error: " + message);
     }
   } else if (events & BEV_EVENT_CONNECTED) {
-    // We should not have receiving or sending request while still
+    // We should not have receiving or sending requests while still
     // connecting.
-    CHECK(currentRecvRequest == NULL);
-    CHECK(currentSendRequest == NULL);
-    if (currentConnectRequest != NULL) {
+    //
+    // TODO(benh): But we aren't checking to make sure that is the
+    // case in LibeventSSLSocketImpl::send/recv, so the following
+    // checks are extremely dangerous and must be removed.
+    CHECK(!currentRecvRequest);
+    CHECK(!currentSendRequest);
+
+    if (currentConnectRequest) {
       // If we're connecting, then we've succeeded. Time to do
       // post-verification.
-      CHECK_NOTNULL(impl->bev);
+      CHECK_NOTNULL(bev);
 
       // Do post-validation of connection.
-      SSL* ssl = bufferevent_openssl_get_ssl(impl->bev);
+      SSL* ssl = bufferevent_openssl_get_ssl(bev);
 
-      Try<Nothing> verify = openssl::verify(ssl, impl->peerHostname);
+      Try<Nothing> verify = openssl::verify(ssl, peerHostname);
 
       if (verify.isError()) {
         VLOG(1) << "Failed connect, post verification error: "
                 << verify.error();
-        internal::failRequest(currentConnectRequest, verify.error());
-        return;
+        fail(currentConnectRequest, verify.error());
+      } else {
+        satisfy(currentConnectRequest, Nothing());
       }
-
-      internal::satisfyRequest(currentConnectRequest, Nothing());
     }
-    if (currentAcceptRequest != NULL) {
+
+    if (currentAcceptRequest) {
       // We will receive a 'CONNECTED' state on an accepting socket
       // once the connection is established. Time to do
       // post-verification.
       SSL* ssl = bufferevent_openssl_get_ssl(bev);
 
-      Try<Nothing> verify = openssl::verify(ssl, impl->peerHostname);
+      Try<Nothing> verify = openssl::verify(ssl, peerHostname);
 
       if (verify.isError()) {
         VLOG(1) << "Failed accept, post verification error: "
                 << verify.error();
-        delete currentAcceptRequest->acceptedSocket;
-        internal::failRequest(currentAcceptRequest, verify.error());
-        return;
-      }
 
-      Socket* socket = currentAcceptRequest->acceptedSocket;
-      internal::satisfyRequest(currentAcceptRequest, impl->socket());
-      delete socket;
+        delete currentAcceptRequest->acceptedSocket;
+
+        fail(currentAcceptRequest, verify.error());
+      } else {
+        Socket* socket = currentAcceptRequest->acceptedSocket;
+        satisfy(currentAcceptRequest, Socket(*socket));
+        delete socket;
+      }
     }
   }
 }
@@ -473,60 +462,71 @@ LibeventSSLSocketImpl::LibeventSSLSocketImpl(int _s, AcceptRequest* request)
     freeSSLCtx(false)
 {
   synchronizer(this) = SYNCHRONIZED_INITIALIZER;
+
   if (request != NULL) {
     bev = request->bev;
     freeSSLCtx = bev != NULL;
     acceptRequest = request;
+
     Try<string> hostname =
-    net::getHostname(
-        reinterpret_cast<sockaddr_in*>(request->sa)->sin_addr.s_addr);
+      net::getHostname(
+          reinterpret_cast<sockaddr_in*>(request->sa)->sin_addr.s_addr);
+
     if (hostname.isError()) {
       VLOG(2) << "Could not determine hostname of peer";
     } else {
       VLOG(2) << "Accepting from " << hostname.get();
       peerHostname = hostname.get();
     }
+
     request->self = this;
   }
 }
 
-// This function runs in the event loop. It is a continuation of
-// 'discardConnect'. See 'Continuation' note at top of file.
-void LibeventSSLSocketImpl::_discardConnect(ConnectRequest* request)
-{
-  bool discard = false;
 
-  synchronized (this) {
-    // Only discard if the active request matches what we're trying to
-    // discard. Otherwise it has been already completed.
-    if (connectRequest == request) {
-      discard = true;
-      connectRequest = NULL;
+LibeventSSLSocketImpl::~LibeventSSLSocketImpl()
+{
+  if (bev != NULL) {
+    SSL* ssl = bufferevent_openssl_get_ssl(bev);
+    // Workaround for SSL shutdown, see:
+    // http://www.wangafu.net/~nickm/libevent-book/Ref6a_advanced_bufferevents.html // NOLINT
+    SSL_set_shutdown(ssl, SSL_RECEIVED_SHUTDOWN);
+    SSL_shutdown(ssl);
+    bufferevent_disable(bev, EV_READ | EV_WRITE);
+
+    // For the connecting socket BEV_OPT_CLOSE_ON_FREE will close the
+    // extra file descriptor. See note below.
+    bufferevent_free(bev);
+
+    RUN_THE_BUFFEREVENT_FREE_IN_EVENT_LOOP_AND_DESTROY_WEAK_PTR_REFERENCE();
+
+    // Since we are using a separate file descriptor for the
+    // connecting socket we end up using BEV_OPT_CLOSE_ON_FREE for the
+    // connecting, but not for the accepting side. Since the
+    // BEV_OPT_CLOSE_ON_FREE also frees the SSL object, we need to
+    // manually free it for the accepting case. See the 'Connecting
+    // Extra File Descriptor' note at top of file.
+    if (freeSSLCtx) {
+      SSL_free(ssl);
     }
   }
 
-  // Discard the promise outside of the object lock as the callbacks
-  // can be expensive.
-  if (discard) {
-    request->promise.discard();
-    delete request;
+  if (listener != NULL) {
+    evconnlistener_free(listener);
   }
-}
-
-
-void LibeventSSLSocketImpl::discardConnect(ConnectRequest* request)
-{
-  run_in_event_loop(lambda::bind(
-      &LibeventSSLSocketImpl::_discardConnect,
-      this,
-      request));
 }
 
 
 Future<Nothing> LibeventSSLSocketImpl::connect(const Address& address)
 {
-  if (connectRequest != NULL) {
-    return Failure("Socket is already connecting");
+  synchronized (this) {
+    if (connectRequest) {
+      return Failure("Socket is already connecting");
+    } else if (bev != NULL) {
+      return Failure("Socket is already connected");
+    } else {
+      connectRequest = std::make_shared<ConnectRequest>();
+    }
   }
 
   if (address.ip == 0) {
@@ -555,8 +555,8 @@ Future<Nothing> LibeventSSLSocketImpl::connect(const Address& address)
   }
 
   // Construct the bufferevent in the connecting state. We don't use
-  // the existing FD due to an issue in libevent-openssl. See the
-  // 'Connection Extra FD' note at top of file.
+  // the existing file descriptor due to an issue in libevent-openssl.
+  // See the 'Connecting Extra File Descriptor' note at top of file.
   bev = bufferevent_openssl_socket_new(
       base,
       -1,
@@ -569,13 +569,25 @@ Future<Nothing> LibeventSSLSocketImpl::connect(const Address& address)
       "Failed to connect: bufferevent_openssl_socket_new");
   }
 
+  // Create a reference back to ourselves as a std::weak_ptr to be
+  // able to allow this socket instance to be destroyed even if we're
+  // still trying to connect, recv, send, or accept. See the
+  // destructor for more information about how this reference gets
+  // deleted itself.
+  reference = new std::weak_ptr<LibeventSSLSocketImpl>(shared());
+
   // Assign the callbacks for the bufferevent.
   bufferevent_setcb(
       bev,
-      &LibeventSSLSocketImpl::recvCallback,
-      &LibeventSSLSocketImpl::sendCallback,
-      &LibeventSSLSocketImpl::eventCallback,
-      this);
+      &readCallback,
+      &writeCallback,
+      &eventCallback,
+      reference);
+
+  // NOTE: It doesn't appear that we actually have a way to discard a
+  // connecting socket with libevent so we don't bother setting up any
+  // 'onDiscard' callbacks. See the related note in
+  // LibeventSSLSocketImpl::send.
 
   // TODO(jmlvanre): sync on new IP address setup.
   sockaddr_in addr;
@@ -584,25 +596,7 @@ Future<Nothing> LibeventSSLSocketImpl::connect(const Address& address)
   addr.sin_port = htons(address.port);
   addr.sin_addr.s_addr = address.ip;
 
-
-  // Optimistically construct a 'connectRequest' and future.
-  ConnectRequest* request = new ConnectRequest(socket());
-  Future<Nothing> future = request->promise.future()
-    .onDiscard(lambda::bind(
-        &LibeventSSLSocketImpl::discardConnect,
-        this,
-        request));
-
-  // Assign 'connectRequest' under lock, fail on error.
-  synchronized (this) {
-    if (connectRequest != NULL) {
-      delete request;
-      return Failure("Socket is already connecting");
-    } else {
-      connectRequest = request;
-    }
-  }
-
+  // TODO(benh): Why doesn't this one need to be run in the event loop?
   if (bufferevent_socket_connect(
       bev,
       reinterpret_cast<struct sockaddr*>(&addr),
@@ -610,49 +604,79 @@ Future<Nothing> LibeventSSLSocketImpl::connect(const Address& address)
     return Failure("Failed to connect: bufferevent_socket_connect");
   }
 
-  return future;
+  return connectRequest->promise.future(); // TODO(benh): This is not safe.
 }
 
 
-// This function runs in the event loop. It is a continuation of
-// 'discardRecv'. See 'Continuation' note at top of file.
-void LibeventSSLSocketImpl::_discardRecv(RecvRequest* request)
+Future<size_t> LibeventSSLSocketImpl::recv(char* data, size_t size)
 {
-  bool discard = false;
-
   synchronized (this) {
-    // Only discard if the active request matches what we're trying to
-    // discard. Otherwise it has been already completed.
-    if (recvRequest == request) {
-      discard = true;
-      recvRequest = NULL;
+    // TODO(benh): Fail if we're connecting or not yet connected?
+    if (recvRequest) {
+      return Failure("Socket is already receiving");
+    } else {
+      recvRequest = std::make_shared<RecvRequest>(data, size);
     }
   }
 
-  // Discard the promise outside of the object lock as the callbacks
-  // can be expensive.
-  if (discard) {
-    bufferevent_disable(bev, EV_READ);
-    request->promise.discard();
-    delete request;
-  }
-}
+  // TODO(benh): What about data that might be available in the
+  // bufferevent because a previous 'recv' caused data to get copied
+  // into the bufferevent but was discarded before the 'readCallback'
+  // callbacks get invoked? Should we try to read that data out first
+  // here?
+
+  recv;
+
+  // Both a 'discardRecv' and 'readCallback' get queued on event loop,
+  // what happens with either ordering?
+  discardRecv;
+  readCallback;
+
+  readCallback;
+  discardRecv;
+
+  // What about when another 'recv' occurs in between the
+  // 'discardRecv' or 'readCallback'?
+  discardRecv;
+//   recv;
+  readCallback;
+  recv;
+
+  readCallback;
+  recv;
+  discardRecv;
 
 
-void LibeventSSLSocketImpl::discardRecv(RecvRequest* request)
-{
+
+  // We can use 'recvRequest' outside of the lock here because no
+  // callbacks should be executing that
+  Future<size_t> future = recvRequest->promise.future()
+    .onDiscard(lambda::bind(
+                   &discardRecv,
+                   std::weak_ptr<LibeventSSLSocketImpl>(shared())));
+
+
+  run_in_event_loop(
+      lambda::bind(&send, shared<LibeventSSLSocketImpl>(), data));
+
   run_in_event_loop(lambda::bind(
-      &LibeventSSLSocketImpl::_discardRecv,
+      &LibeventSSLSocketImpl::_recv,
       this,
-      request));
+      size));
+
+  return connectRequest->promise.future(); // TODO(benh): Verify safety.
 }
+
 
 
 // This function runs in the event loop. It is a continuation of
 // 'recv'. See 'Continuation' note at top of file.
+void LibeventSSLSocketImpl::_recv(std::shared_ptr<LibeventSSLSocketImpl>&& impl)
 void LibeventSSLSocketImpl::_recv(size_t size)
 {
   bool recv = false;
+
+
 
   synchronized (this) {
     // Only recv if there is an active request. If 'recvRequest' is
@@ -669,139 +693,108 @@ void LibeventSSLSocketImpl::_recv(size_t size)
 }
 
 
-Future<size_t> LibeventSSLSocketImpl::recv(char* data, size_t size)
+void LibeventSSLSocketImpl::discardRecv(RecvRequest* request)
 {
-  // Optimistically construct a 'RecvRequest' and future.
-  // Copy this socket into the request to keep the it alive.
-  RecvRequest* request = new RecvRequest(data, size, socket());
-  Future<size_t> future = request->promise.future()
-    .onDiscard(lambda::bind(
-        &LibeventSSLSocketImpl::discardRecv,
-        this,
-        request));
+  run_in_event_loop(&_discardRecv,
+                    );
 
-  // Assign 'recvRequest' under lock, fail on error.
-  synchronized (this) {
-    if (recvRequest != NULL) {
-      delete request;
-      return Failure("Socket is already receiving");
-    } else {
-      recvRequest = request;
-    }
-  }
-
-  run_in_event_loop(lambda::bind(
-      &LibeventSSLSocketImpl::_recv,
-      this,
-      size));
-
-  return future;
-}
-
-// This function runs in the event loop. It is a continuation of
-// 'discardSend'. See 'Continuation' note at top of file.
-void LibeventSSLSocketImpl::_discardSend(SendRequest* request)
-{
-  bool discard = false;
-
-  synchronized (this) {
-    // Only discard if the active request matches what we're trying to
-    // discard. Otherwise it has been already completed.
-    if (sendRequest == request) {
-      discard = true;
-      sendRequest = NULL;
-    }
-  }
-
-  // Discard the promise outside of the object lock as the callbacks
-  // can be expensive.
-  if (discard) {
-    request->promise.discard();
-    delete request;
-  }
-}
-
-
-void LibeventSSLSocketImpl::discardSend(SendRequest* request)
-{
-  run_in_event_loop(lambda::bind(
-      &LibeventSSLSocketImpl::_discardSend,
+lambda::bind(
+      &LibeventSSLSocketImpl::_discardRecv,
       this,
       request));
 }
 
 
 // This function runs in the event loop. It is a continuation of
-// 'send'. See 'Continuation' note at top of file.
-void LibeventSSLSocketImpl::_send(const char* data, size_t size)
+// 'discardRecv'. See 'Continuation' note at top of file.
+void _discardRecv(
+    std::weak_ptr<LibeventSSLSocketImpl> weak,
+    std::shared_ptr<RecvRequest> request)
 {
-  bool send = false;
+  std::shared_ptr<LibeventSSLSocketImpl> impl(weak.lock());
+
+  if (!impl) {
+    return;
+  }
+
+  impl->discard(request);
+
+
+
+  bool discard = false;
 
   synchronized (this) {
-    // Only send if there is an active request. If 'sendRequest' is
-    // NULL then the request has been discarded.
-    if (sendRequest != NULL) {
-      send = true;
+    // Only discard if the active request matches what we're trying to
+    // discard. Otherwise it has been already completed
+    if (recvRequest == request) {
+      discard = true;
+      recvRequest = NULL;
     }
   }
 
-  if (send) {
-    bufferevent_write(bev, data, size);
+  // Discard the promise outside of the object lock as the callbacks
+  // can be expensive.
+  if (discard) {
+    bufferevent_disable(bev, EV_READ);
+    request->promise.discard();
+    delete request;
   }
 }
 
 
 Future<size_t> LibeventSSLSocketImpl::send(const char* data, size_t size)
 {
-  // Optimistically construct a 'SendRequest' and future.
-  // Copy this socket into the request to keep the it alive.
-  SendRequest* request = new SendRequest(size, socket());
-  Future<size_t> future = request->promise.future()
-    .onDiscard(lambda::bind(
-        &LibeventSSLSocketImpl::discardSend,
-        this,
-        request));
-
-  // Assign 'sendRequest' under lock, fail on error.
   synchronized (this) {
-    if (sendRequest != NULL) {
-      delete request;
+    // TODO(benh): Fail if we're connecting or not yet connected?
+    if (sendRequest) {
       return Failure("Socket is already sending");
     } else {
-      sendRequest = request;
+      sendRequest = std::make_shared<SendRequest>(size);
     }
   }
 
-  run_in_event_loop(lambda::bind(
-      &LibeventSSLSocketImpl::_send,
-      this,
-      data,
-      size));
+  // NOTE: We don't bother setting up 'onDiscard' because we can't
+  // really "discard" a send since once we copy the data to the buffer
+  // it's there until it gets written. While we could allow for
+  // discarding the send between now and when we actually write the
+  // data to the buffer (via bufferevent_write) the only reason why
+  // we're currently doing that in the event loop is because of a bug
+  // with libevent and in future versions we'll just do that here in
+  // which case there will be no delay in writing to the
+  // buffer. Moreover, it would be unnecessarily complex to have to
+  // distinguish when the future was actually discarded in the
+  // 'onDiscard' handler given that after we do bufferevent_write we'd
+  // want to ignore any discards that occur. Thus, we currently don't
+  // support discarding a 'send' (or 'sendfile', since it's the same
+  // mechanism).
+
+  run_in_event_loop(
+      lambda::bind(&send, shared<LibeventSSLSocketImpl>(), data));
 
   return future;
 }
 
 
 // This function runs in the event loop. It is a continuation of
-// 'sendfile'. See 'Continuation' note at top of file.
-void LibeventSSLSocketImpl::_sendfile(
-    int fd,
-    off_t offset,
-    size_t size)
+// 'LibeventSSLSocketImpl::send'. See 'Continuation' note at top of
+// file.
+void send(std::shared_ptr<LibeventSSLSocketImpl> impl, const char* data)
 {
-  bool sendfile = false;
+  CHECK(__in_event_loop__);
 
-  synchronized (this) {
-    // Only sendfile if there is an active request. If 'sendRequest'
-    // is NULL then the request has been discarded.
-    if (sendRequest != NULL) {
-      sendfile = true;
-    }
-  }
+  CHECK_NOTNULL(impl->bev);
 
-  if (sendfile) {
-    evbuffer_add_file(bufferevent_get_output(bev), fd, offset, size);
-  }
+  CHECK(impl->sendRequest);
+
+  // NOTE: We keep the write low-water mark at the default of 0 so
+  // that all of the data that we put into the buffer gets written
+  // before we get the write callback and can satisfy this send
+  // request.
+
+  bufferevent_write(
+      impl->bev,
+      data,
+      impl->sendRequest->size);
 }
 
 
@@ -810,33 +803,54 @@ Future<size_t> LibeventSSLSocketImpl::sendfile(
     off_t offset,
     size_t size)
 {
-  // Optimistically construct a 'SendRequest' and future.
-  // Copy this socket into the request to keep the it alive.
-  SendRequest* request = new SendRequest(size, socket());
-  Future<size_t> future = request->promise.future()
-    .onDiscard(lambda::bind(
-        &LibeventSSLSocketImpl::discardSend,
-        this,
-        request));
-
-  // Assign 'sendRequest' under lock, fail on error.
   synchronized (this) {
-    if (sendRequest != NULL) {
-      delete request;
+    // TODO(benh): Fail if we're connecting or not yet connected?
+    if (sendRequest) {
       return Failure("Socket is already sending");
     } else {
-      sendRequest = request;
+      sendRequest = std::make_shared<SendRequest>(size);
     }
   }
 
-  run_in_event_loop(lambda::bind(
-      &LibeventSSLSocketImpl::_sendfile,
-      this,
-      fd,
-      offset,
-      size));
+  // NOTE: See the note in LibeventSSLSocketImpl::send for why we
+  // don't set an 'onDiscard' callback on the future.
+
+  run_in_event_loop(
+      lambda::bind(&sendfile, shared<LibeventSSLSocketImpl>(), fd, offset));
 
   return future;
+}
+
+
+// This function runs in the event loop. It is a continuation of
+// 'LibeventSSLSocketImpl::sendfile'. See 'Continuation' note at top
+// of file.
+void sendfile(
+    std::shared_ptr<LibeventSSLSocketImpl> impl,
+    int fd,
+    off_t offset)
+{
+  CHECK(__in_event_loop__);
+
+  CHECK_NOTNULL(impl->bev);
+
+  CHECK(impl->sendRequest);
+
+  // NOTE: We keep the write low-water mark at the default of 0 so
+  // that all of the data that we put into the buffer gets written
+  // before we get the write callback and can satisfy this send
+  // request.
+
+  // TODO(benh): According to the documentation evbuffer_add_file
+  // "owns owns the resulting file descriptor and will close it when
+  // finished transferring data". Unfortunately, it's unclear what the
+  // "resulting file descriptor" means so we 'dup' the descriptor just
+  // in case. We should confirm these semantics.
+  evbuffer_add_file(
+      bufferevent_get_output(impl->bev),
+      dup(fd),
+      offset,
+      impl->sendRequest->size);
 }
 
 
@@ -906,6 +920,7 @@ void LibeventSSLSocketImpl::doAccept(
       request->self);
 }
 
+
 // This callback is run within the event loop.
 void LibeventSSLSocketImpl::acceptCallback(
     struct evconnlistener* listener,
@@ -955,6 +970,7 @@ Try<Nothing> LibeventSSLSocketImpl::listen(int backlog)
       LEV_OPT_REUSEABLE,
       backlog,
       s);
+
   if (listener == NULL) {
     return Error("Failed to listen on socket");
   }
@@ -964,17 +980,6 @@ Try<Nothing> LibeventSSLSocketImpl::listen(int backlog)
   return Nothing();
 }
 
-
-// This function is run within the event loop. It is a continuation
-// from accept that ensures we check the pendingAccepts queue safely.
-void LibeventSSLSocketImpl::_accept()
-{
-  if (!pendingAccepts.empty()) {
-    const PendingAccept &p = pendingAccepts.front();
-    doAccept(p.sock, p.sa, p.sa_len);
-    pendingAccepts.pop();
-  }
-}
 
 // Since we queue accepts in the 'pendingAccepts' queue, there is the
 // ability for the queue to grow if the serving loop (the loop that
@@ -1009,6 +1014,49 @@ Future<Socket> LibeventSSLSocketImpl::accept()
       this));
 
   return future;
+}
+
+
+// This function is run within the event loop. It is a continuation
+// from 'accept' that ensures we check the 'pendingAccepts' queue
+// safely.
+void LibeventSSLSocketImpl::_accept()
+{
+  if (!pendingAccepts.empty()) {
+    const PendingAccept &p = pendingAccepts.front();
+    doAccept(p.sock, p.sa, p.sa_len);
+    pendingAccepts.pop();
+  }
+}
+
+
+void LibeventSSLSocketImpl::shutdown()
+{
+  run_in_event_loop(lambda::bind(&LibeventSSLSocketImpl::_shutdown, this));
+}
+
+
+// This function runs in the event loop. It is a continuation of
+// 'shutdown'. See 'Continuation' note at top of file.
+void LibeventSSLSocketImpl::_shutdown()
+{
+  CHECK_NOTNULL(bev);
+
+  bufferevent_lock(bev);
+  { // Bev locking scope.
+    RecvRequest* request = NULL;
+
+    // Swap the recvRequest under the object lock.
+    synchronized (this) {
+      std::swap(request, recvRequest);
+    }
+
+    // If there is still a pending receive request then close it.
+    if (request != NULL) {
+      internal::satisfyRequest(request, 0);
+    }
+  } // End bev locking scope.
+  bufferevent_unlock(bev);
 }
 
 } // namespace network {

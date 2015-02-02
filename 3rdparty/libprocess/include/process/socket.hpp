@@ -105,11 +105,17 @@ public:
     // Construct a Socket wrapper from this implementation.
     Socket socket() { return Socket(shared_from_this()); }
 
+    template <typename T>
+    std::shared_ptr<T> shared()
+    {
+      return std::dynamic_pointer_cast<T>(shared_from_this());
+    }
+
     // Construct a new Socket from the given impl. This is a proxy
     // function, as Impls derived from this won't have access to the
     // Socket::Socket(...) constructors.
-    Socket socket(std::shared_ptr<Impl>&& that) { return Socket(that); }
-    Socket socket(const std::shared_ptr<Impl>& that) { return Socket(that); }
+//     Socket socket(std::shared_ptr<Impl>&& that) { return Socket(that); }
+//     Socket socket(const std::shared_ptr<Impl>& that) { return Socket(that); }
 
     int s;
   };
@@ -185,9 +191,9 @@ public:
   }
 
 private:
-  explicit Socket(std::shared_ptr<Impl>&& that) : impl(std::move(that)) {}
+//   explicit Socket(std::shared_ptr<Impl>&& that) : impl(std::move(that)) {}
 
-  explicit Socket(const std::shared_ptr<Impl>& that) : impl(that) {}
+//   explicit Socket(const std::shared_ptr<Impl>& that) : impl(that) {}
 
   std::shared_ptr<Impl> impl;
 };
