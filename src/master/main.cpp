@@ -126,14 +126,23 @@ int main(int argc, char** argv)
   uint16_t port;
   flags.add(&port, "port", "Port to listen on", MasterInfo().port());
 
+  // ZooKeeper and etcd leader election URLs.
   Option<string> zk;
   flags.add(&zk,
             "zk",
-            "ZooKeeper URL (used for leader election amongst masters)\n"
-            "May be one of:\n"
+            "ZooKeeper URL to use for election. Only one of --zk or --etcd may"
+            " be used."
+            "Sample:\n"
             "  zk://host1:port1,host2:port2,.../path\n"
-            "  zk://username:password@host1:port1,host2:port2,.../path\n"
-            "  file:///path/to/file (where file contains one of the above)");
+            "  zk://username:password@host1:port1,host2:port2,.../path");
+
+  Option<string> etcd;
+  flags.add(&etcd,
+            "etcd",
+            "etcd URL to use for leader election. Only one of --zk or --etcd "
+            "may be used."
+            "Sample:\n"
+            "  etcd://host1:port1,host2:port2,host3:port3/v2/keys/path\n");
 
   bool help;
   flags.add(&help,
@@ -157,6 +166,18 @@ int main(int argc, char** argv)
   if (help) {
     usage(argv[0], flags);
     exit(1);
+  }
+
+  // Grab the leader election mechanism and fail if --etcd and --zk
+  // are both provided.
+  Option<string> mechanism = None();
+
+  if (etcd.isSome() && zk.isSome()) {
+    EXIT(1) << "Cannot specify both --etcd and --zk options at the same time";
+  } else if (etcd.isSome()) {
+    mechanism = etcd;
+  } else if (zk.isSome()) {
+    mechanism = zk;
   }
 
   // Initialize modules. Note that since other subsystems may depend
@@ -224,14 +245,19 @@ int main(int argc, char** argv)
               << "': " << mkdir.error();
     }
 
-    if (zk.isSome()) {
+    if (mechanism.isSome()) {
       // Use replicated log with ZooKeeper.
       if (flags.quorum.isNone()) {
         EXIT(1) << "Need to specify --quorum for replicated log based"
                 << " registry when using ZooKeeper";
       }
 
-      Try<zookeeper::URL> url = zookeeper::URL::parse(zk.get());
+      if (etcd.isSome()) {
+        EXIT(1) << "etcd is not a supported mechanism for replicated "
+                << "log group membership."
+      }
+
+      Try<zookeeper::URL> url = zookeeper::URL::parse(mechanism.get());
       if (url.isError()) {
         EXIT(1) << "Error parsing ZooKeeper URL: " << url.error();
       }
@@ -269,13 +295,13 @@ int main(int argc, char** argv)
   MasterContender* contender;
   MasterDetector* detector;
 
-  Try<MasterContender*> contender_ = MasterContender::create(zk);
+  Try<MasterContender*> contender_ = MasterContender::create(mechanism);
   if (contender_.isError()) {
     EXIT(1) << "Failed to create a master contender: " << contender_.error();
   }
   contender = contender_.get();
 
-  Try<MasterDetector*> detector_ = MasterDetector::create(zk);
+  Try<MasterDetector*> detector_ = MasterDetector::create(mechanism);
   if (detector_.isError()) {
     EXIT(1) << "Failed to create a master detector: " << detector_.error();
   }
@@ -355,7 +381,7 @@ int main(int argc, char** argv)
       slaveRemovalLimiter,
       flags);
 
-  if (zk.isNone()) {
+  if (mechanism.isNone()) {
     // It means we are using the standalone detector so we need to
     // appoint this Master as the leader.
     dynamic_cast<StandaloneMasterDetector*>(detector)->appoint(master->info());
