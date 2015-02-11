@@ -1468,6 +1468,8 @@ if HAS_PYTHON
   mesos_tests_DEPENDENCIES += $(EXAMPLESCRIPTSPYTHON)
 endif
 
+mesos_tests_SOURCES += tests/etcd_tests.cpp
+
 EXTRA_DIST += examples/python/test_containerizer.py			\
 	      examples/python/test_executor.py				\
 	      examples/python/test_framework.py
@@ -1475,6 +1477,7 @@ EXTRA_DIST += examples/python/test_containerizer.py			\
 
 dist_check_SCRIPTS +=							\
   tests/balloon_framework_test.sh					\
+  tests/etcd_test.sh							\
   tests/low_level_scheduler_libprocess_test.sh				\
   tests/low_level_scheduler_pthread_test.sh				\
   tests/java_exception_test.sh						\
