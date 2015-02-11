@@ -28,6 +28,8 @@
 #include <stout/stringify.hpp>
 #include <stout/try.hpp>
 
+#include "etcd/url.hpp"
+
 #include "messages/messages.hpp"
 
 #include "zookeeper/detector.hpp"
@@ -39,10 +41,10 @@ namespace internal {
 
 extern const Duration MASTER_DETECTOR_ZK_SESSION_TIMEOUT;
 
-
 // Forward declarations.
 class StandaloneMasterDetectorProcess;
 class ZooKeeperMasterDetectorProcess;
+class EtcdMasterDetectorProcess;
 
 
 // An abstraction of a Master detector which can be used to
@@ -55,7 +57,9 @@ public:
   //   - host:port
   //   - zk://host1:port1,host2:port2,.../path
   //   - zk://username:password@host1:port1,host2:port2,.../path
-  static Try<MasterDetector*> create(const std::string& mechanism);
+  //   - etcd://host1:port1,host2:port2,.../v2/keys/path
+  static Try<MasterDetector*> create(const Option<std::string>& mechanism);
+
   virtual ~MasterDetector() = 0;
 
   // Returns MasterInfo after an election has occurred and the elected
@@ -71,7 +75,7 @@ public:
   // The 'previous' result (if any) should be passed back if this
   // method is called repeatedly so the detector only returns when it
   // gets a different result.
-  virtual process::Future<Option<MasterInfo> > detect(
+  virtual process::Future<Option<MasterInfo>> detect(
       const Option<MasterInfo>& previous = None()) = 0;
 };
 
@@ -83,6 +87,7 @@ class StandaloneMasterDetector : public MasterDetector
 {
 public:
   StandaloneMasterDetector();
+
   // Use this constructor if the leader is known beforehand so it is
   // unnecessary to call 'appoint()' separately.
   explicit StandaloneMasterDetector(const MasterInfo& leader);
@@ -98,7 +103,7 @@ public:
   // Same as above but takes 'UPID' as the parameter.
   void appoint(const process::UPID& leader);
 
-  virtual process::Future<Option<MasterInfo> > detect(
+  virtual process::Future<Option<MasterInfo>> detect(
       const Option<MasterInfo>& previous = None());
 
 private:
@@ -112,6 +117,7 @@ public:
   // Creates a detector which uses ZooKeeper to determine (i.e.,
   // elect) a leading master.
   explicit ZooKeeperMasterDetector(const zookeeper::URL& url);
+
   // Used for testing purposes.
   explicit ZooKeeperMasterDetector(process::Owned<zookeeper::Group> group);
   virtual ~ZooKeeperMasterDetector();
@@ -120,11 +126,29 @@ public:
   // The detector transparently tries to recover from retryable
   // errors until the group session expires, in which case the Future
   // returns None.
-  virtual process::Future<Option<MasterInfo> > detect(
+  virtual process::Future<Option<MasterInfo>> detect(
       const Option<MasterInfo>& previous = None());
 
 private:
   ZooKeeperMasterDetectorProcess* process;
+};
+
+
+class EtcdMasterDetector : public MasterDetector
+{
+public:
+  // Creates a detector which uses etcd to determine (i.e., elect) a
+  // leading master.
+  explicit EtcdMasterDetector(const etcd::URL& url);
+
+  virtual ~EtcdMasterDetector();
+
+  // MasterDetector implementation.
+  virtual process::Future<Option<MasterInfo>> detect(
+      const Option<MasterInfo>& previous = None());
+
+private:
+  EtcdMasterDetectorProcess* process;
 };
 
 } // namespace internal {

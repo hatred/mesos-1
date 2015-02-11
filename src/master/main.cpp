@@ -269,17 +269,13 @@ int main(int argc, char** argv)
   MasterContender* contender;
   MasterDetector* detector;
 
-  // TODO(vinod): 'MasterContender::create()' should take
-  // Option<string>.
-  Try<MasterContender*> contender_ = MasterContender::create(zk.get(""));
+  Try<MasterContender*> contender_ = MasterContender::create(zk);
   if (contender_.isError()) {
     EXIT(1) << "Failed to create a master contender: " << contender_.error();
   }
   contender = contender_.get();
 
-  // TODO(vinod): 'MasterDetector::create()' should take
-  // Option<string>.
-  Try<MasterDetector*> detector_ = MasterDetector::create(zk.get(""));
+  Try<MasterDetector*> detector_ = MasterDetector::create(zk);
   if (detector_.isError()) {
     EXIT(1) << "Failed to create a master detector: " << detector_.error();
   }

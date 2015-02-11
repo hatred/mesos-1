@@ -30,9 +30,13 @@
 
 #include <stout/duration.hpp>
 #include <stout/foreach.hpp>
+#include <stout/json.hpp>
 #include <stout/lambda.hpp>
+#include <stout/protobuf.hpp>
 
 #include "common/protobuf_utils.hpp"
+
+#include "etcd/etcd.hpp"
 
 #include "master/constants.hpp"
 #include "master/detector.hpp"
@@ -196,12 +200,112 @@ private:
 };
 
 
-Try<MasterDetector*> MasterDetector::create(const string& mechanism)
+class EtcdMasterDetectorProcess
+  : public Process<EtcdMasterDetectorProcess>
 {
-  if (mechanism == "") {
+public:
+  explicit EtcdMasterDetectorProcess(const etcd::URL& _url) : url(_url) {}
+
+  virtual ~EtcdMasterDetectorProcess() {}
+
+  Future<Option<MasterInfo>> detect(const Option<MasterInfo>& previous)
+  {
+    // Try and get the current master.
+    return etcd::get(url)
+      .then(defer(self(), &Self::_detect, previous, lambda::_1));
+  }
+
+private:
+  Future<Option<MasterInfo>> _detect(
+      const Option<MasterInfo>& previous,
+      const Option<etcd::Node>& node)
+  {
+    // Check and see if the node still exists.
+    if (node.isNone() && previous.isSome()) {
+      return None();
+    }
+
+    // If we need to continue watching then we'll use a 'waitIndex' to
+    // pass to etcd extracted from the 'modifiedIndex' from the
+    // node. But it's also possible that 'node' is None in which case
+    // we'll leave 'waitIndex' as None as well).
+    Option<uint64_t> waitIndex = None();
+
+    // Determine if we have a newly elected master or need to keep
+    // waiting by watching.
+    if (node.isSome() && node.get().value.isSome()) {
+      Try<JSON::Value> json = JSON::parse(node.get().value.get());
+      if (json.isError()) {
+        return Failure("Failed to parse JSON: " json.error());
+      }
+
+      Try<MasterInfo> info = ::protobuf::parse<MasterInfo>(json.get());
+      if (info.isError()) {
+        return Failure("Failed to parse MasterInfo from JSON: " + info.error());
+      }
+
+      // Check if we have a newly detected master.
+      if (previous != info.get()) {
+        return info.get();
+      }
+
+      if (node.get().modifiedIndex.isSome()) {
+        // In order to watch for the next change we want
+        // 'modifiedIndex + 1'.
+        waitIndex = node.get().modifiedIndex.get() + 1;
+      }
+    }
+
+    // NOTE: We're explicitly ignoring the return value of
+    // 'etcd::watch' since we can't distinguish a failed future from
+    // when etcd might have closed our connection because we were
+    // connected for the maximum watch time limit. Instead, we simply
+    // retry after 'etcd::watch' completes or fails.
+    return etcd::watch(url, waitIndex)
+      .repair(defer(self(), &Self::repair, lambda::_1))
+      .then(defer(self(), &Self::detect, previous));
+  }
+
+  Future<Option<etcd::Node>> repair(const Future<Option<etcd::Node>>&)
+  {
+    // We "repair" the future by just returning None as that will
+    // cause the detection loop to continue.
+    return None();
+  }
+
+  const etcd::URL url;
+};
+
+
+
+EtcdMasterDetector::EtcdMasterDetector(const etcd::URL& url)
+{
+  process = new EtcdMasterDetectorProcess(url);
+  spawn(process);
+}
+
+
+EtcdMasterDetector::~EtcdMasterDetector()
+{
+  terminate(process);
+  process::wait(process);
+  delete process;
+}
+
+
+Future<Option<MasterInfo>> EtcdMasterDetector::detect(
+  const Option<MasterInfo>& previous)
+{
+  return dispatch(process, &EtcdMasterDetectorProcess::detect, previous);
+}
+
+
+Try<MasterDetector*> MasterDetector::create(const Option<string>& mechanism)
+{
+  if (mechanism.isNone()) {
     return new StandaloneMasterDetector();
-  } else if (strings::startsWith(mechanism, "zk://")) {
-    Try<zookeeper::URL> url = zookeeper::URL::parse(mechanism);
+  } else if (strings::startsWith(mechanism.get(), zookeeper::URL::scheme())) {
+    Try<zookeeper::URL> url = zookeeper::URL::parse(mechanism.get());
     if (url.isError()) {
       return Error(url.error());
     }
@@ -210,6 +314,12 @@ Try<MasterDetector*> MasterDetector::create(const string& mechanism)
           "Expecting a (chroot) path for ZooKeeper ('/' is not supported)");
     }
     return new ZooKeeperMasterDetector(url.get());
+  } else if (strings::startsWith(mechanism.get(), etcd::URL::scheme())) {
+    Try<etcd::URL> url = etcd::URL::parse(mechanism.get());
+    if (url.isError()) {
+      return Error(url.error());
+    }
+    return new EtcdMasterDetector(url.get());
   } else if (strings::startsWith(mechanism, "file://")) {
     // Load the configuration out of a file. While Mesos and related
     // programs always use <stout/flags> to process the command line
@@ -237,15 +347,13 @@ Try<MasterDetector*> MasterDetector::create(const string& mechanism)
     return create(strings::trim(read.get()));
   }
 
-  CHECK(!strings::startsWith(mechanism, "file://"));
-
   // Okay, try and parse what we got as a PID.
-  UPID pid = mechanism.find("master@") == 0
-    ? UPID(mechanism)
-    : UPID("master@" + mechanism);
+  UPID pid = mechanism.get().find("master@") == 0
+    ? UPID(mechanism.get())
+    : UPID("master@" + mechanism.get());
 
   if (!pid) {
-    return Error("Failed to parse '" + mechanism + "'");
+    return Error("Failed to parse '" + mechanism.get() + "'");
   }
 
   return new StandaloneMasterDetector(protobuf::createMasterInfo(pid));

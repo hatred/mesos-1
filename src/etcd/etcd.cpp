@@ -394,7 +394,7 @@ Future<Option<Node>> watch(
     url.query["wait"] = "true";
 
     if (waitIndex.isSome()) {
-      url.query["waitIndex"] = stringify(waitIndex.get() + 1);
+      url.query["waitIndex"] = stringify(waitIndex.get());
     }
 
     urls.push_back(url);

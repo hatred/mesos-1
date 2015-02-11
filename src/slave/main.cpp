@@ -175,7 +175,7 @@ int main(int argc, char** argv)
             << containerizer.error();
   }
 
-  Try<MasterDetector*> detector = MasterDetector::create(master.get());
+  Try<MasterDetector*> detector = MasterDetector::create(master);
 
   if (detector.isError()) {
     EXIT(1) << "Failed to create a master detector: " << detector.error();
