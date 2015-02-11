@@ -108,6 +108,9 @@ extern const Duration ZOOKEEPER_SESSION_TIMEOUT;
 // Name of the default, CRAM-MD5 authenticator.
 extern const std::string DEFAULT_AUTHENTICATOR;
 
+// Number of seconds for the default etcd TTL.
+extern const Duration DEFAULT_ETCD_TTL;
+
 } // namespace master {
 } // namespace internal {
 } // namespace mesos {

@@ -43,6 +43,7 @@ const uint32_t TASK_LIMIT = 100;
 const std::string MASTER_INFO_LABEL = "info";
 const Duration ZOOKEEPER_SESSION_TIMEOUT = Seconds(10);
 const std::string DEFAULT_AUTHENTICATOR = "crammd5";
+const Duration DEFAULT_ETCD_TTL = Seconds(5);
 
 } // namespace master {
 } // namespace internal {

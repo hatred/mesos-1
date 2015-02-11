@@ -312,6 +312,10 @@ libmesos_no_3rdparty_la_SOURCES =					\
 	common/values.cpp						\
 	docker/docker.hpp						\
 	docker/docker.cpp						\
+	etcd/etcd.cpp							\
+	etcd/etcd.hpp							\
+	etcd/url.cpp							\
+	etcd/url.hpp							\
 	exec/exec.cpp							\
 	files/files.cpp							\
 	hook/manager.cpp						\

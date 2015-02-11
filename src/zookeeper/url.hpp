@@ -50,7 +50,7 @@ class URL
 public:
   static Try<URL> parse(const std::string& url);
 
-  static const char* scheme()
+  static std::string scheme()
   {
     return "zk://";
   }
