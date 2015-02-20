@@ -132,7 +132,7 @@ Try<MasterContender*> MasterContender::create(const Option<string>& mechanism)
       return Error(url.error());
     }
     return new EtcdMasterContender(url.get());
-  } else if (strings::startsWith(mechanism, "file://")) {
+  } else if (strings::startsWith(mechanism.get(), "file://")) {
     // Load the configuration out of a file. While Mesos and related
     // programs always use <stout/flags> to process the command line
     // arguments (and therefore file://) this entrypoint is exposed by
@@ -150,7 +150,7 @@ Try<MasterContender*> MasterContender::create(const Option<string>& mechanism)
     LOG(WARNING) << "Specifying master election mechanism / ZooKeeper URL to "
                     "be read out of a file via 'file://' is deprecated inside "
                     "Mesos and will be removed in a future release.";
-    const string& path = mechanism.substr(7);
+    const string& path = mechanism.get().substr(7);
     const Try<string> read = os::read(path);
     if (read.isError()) {
       return Error("Failed to read from file at '" + path + "'");
@@ -159,7 +159,7 @@ Try<MasterContender*> MasterContender::create(const Option<string>& mechanism)
     return create(strings::trim(read.get()));
   }
 
-  return Error("Failed to parse '" + mechanism + "'");
+  return Error("Failed to parse '" + mechanism.get() + "'");
 }
 
 

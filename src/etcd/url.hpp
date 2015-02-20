@@ -44,11 +44,13 @@ struct URL
 
   struct Server
   {
-    std::string domain;
+    std::string host; // Hostname or IP.
     uint16_t port;
   };
 
   const std::vector<Server> servers;
+
+  const std::string path;
 
   static std::string scheme()
   {
@@ -61,7 +63,7 @@ inline std::ostream& operator << (
     std::ostream& stream,
     const URL::Server& server)
 {
-  return stream << server.domain << ':' << server.port;
+  return stream << server.host << ':' << server.port;
 }
 
 

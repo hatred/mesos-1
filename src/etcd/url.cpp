@@ -40,7 +40,7 @@ Try<etcd::URL> etcd::URL::parse(string url)
                  "' at the beginning of the URL");
   }
 
-  url = url.substr(strlen(etcd::URL::scheme()));
+  url = url.substr(etcd::URL::scheme().size());
 
   // Look for the trailing first '/' after the scheme which marks the
   // start of the path.
@@ -66,7 +66,7 @@ Try<etcd::URL> etcd::URL::parse(string url)
     } else if (parts.size() == 2) {
       Try<uint16_t> port = numify<uint16_t>(parts[1]);
       if (port.isError()) {
-        return Error("Invalid port '" + + port "' for server '" + server +
+        return Error("Invalid port '" + parts[1] + "' for server '" + server +
                      "': " + port.error());
       }
       servers.push_back(etcd::URL::Server{parts[0], port.get()});
@@ -82,8 +82,9 @@ Try<etcd::URL> etcd::URL::parse(string url)
   }
 
   // The path should begin with '/v2/keys/'.
-  if (strings::startsWith(path, "/v2/keys/")) {
-    return Error("Must pass a etcd v2 API path which begins with /v2/keys");
+  if (!strings::startsWith(path, "/v2/keys/")) {
+    return Error("Must pass a etcd v2 API path which begins with /v2/keys/ "
+                 "(got '" + path + "')");
   }
 
   // Only operate on etcd keys not directories.

@@ -236,7 +236,7 @@ private:
     if (node.isSome() && node.get().value.isSome()) {
       Try<JSON::Value> json = JSON::parse(node.get().value.get());
       if (json.isError()) {
-        return Failure("Failed to parse JSON: " json.error());
+        return Failure("Failed to parse JSON: " + json.error());
       }
 
       Try<MasterInfo> info = ::protobuf::parse<MasterInfo>(json.get());
@@ -320,7 +320,7 @@ Try<MasterDetector*> MasterDetector::create(const Option<string>& mechanism)
       return Error(url.error());
     }
     return new EtcdMasterDetector(url.get());
-  } else if (strings::startsWith(mechanism, "file://")) {
+  } else if (strings::startsWith(mechanism.get(), "file://")) {
     // Load the configuration out of a file. While Mesos and related
     // programs always use <stout/flags> to process the command line
     // arguments (and therefore file://) this entrypoint is exposed by
@@ -338,7 +338,7 @@ Try<MasterDetector*> MasterDetector::create(const Option<string>& mechanism)
     LOG(WARNING) << "Specifying master detection mechanism / ZooKeeper URL to "
                     "be read out of a file via 'file://' is deprecated inside "
                     "Mesos and will be removed in a future release.";
-    const string& path = mechanism.substr(7);
+    const string& path = mechanism.get().substr(7);
     const Try<string> read = os::read(path);
     if (read.isError()) {
       return Error("Failed to read from file at '" + path + "'");

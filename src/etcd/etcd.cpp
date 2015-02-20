@@ -17,7 +17,7 @@
  */
 
 #include <string>
-#include <vector>
+#include <deque>
 
 #include <process/future.hpp>
 #include <process/http.hpp>
@@ -35,7 +35,7 @@
 using namespace process;
 
 using std::string;
-using std::vector;
+using std::deque;
 
 namespace etcd {
 
@@ -235,13 +235,13 @@ Failure failure(const Response& response)
 
 
 // Forward declarations of continuations.
-static Future<Option<Node>> _create(vector<http::URL> urls);
+static Future<http::Response> _create(deque<http::URL> urls);
 static Future<Option<Node>> __create(const Response& response);
 
-static Future<Option<Node>> _get(vector<http::URL> urls);
+static Future<http::Response> _get(deque<http::URL> urls);
 static Future<Option<Node>> __get(const Response& response);
 
-static Future<Option<Node>> _watch(vector<http::URL> urls);
+static Future<http::Response> _watch(deque<http::URL> urls);
 static Future<Option<Node>> __watch(const Response& response);
 
 
@@ -254,7 +254,7 @@ Future<Option<Node>> create(
     const Option<string>& prevValue)
 {
   // Transform the etcd URL into a collection of HTTP URLs.
-  vector<http::URL> urls;
+  deque<http::URL> urls;
 
   foreach (const URL::Server& server, _url.servers) {
     // TODO(benh): Use HTTPS after supported in libprocess.
@@ -284,11 +284,20 @@ Future<Option<Node>> create(
     urls.push_back(url);
   }
 
-  return _create(urls);
+  // TODO(benh): Randomize ordering of URLs or some how create a
+  // structure to know which one was used in the past and use that
+  // one. The latter would be easier if we actually had an 'Etcd'
+  // object from which we made 'create', 'get', 'watch', etc, not take
+  // the entire etcd::URL but instead just took the necessary
+  // parameters (like, 'key', 'value', etc).
+
+  return _create(urls)
+    .then(lambda::bind(&parse, lambda::_1))
+    .then(lambda::bind(&__create, lambda::_1));
 }
 
 
-static Future<Option<Node>> _create(vector<http::URL> urls)
+static Future<http::Response> _create(deque<http::URL> urls)
 {
   if (urls.empty()) {
     return Failure("Exhaustively tried all etcd servers; giving up");
@@ -300,9 +309,7 @@ static Future<Option<Node>> _create(vector<http::URL> urls)
 
   // TODO(benh): Add connection timeout once supported by http::put.
   return http::put(url)
-    .repair(lambda::bind(&_create, urls))
-    .then(lambda::bind(&parse, lambda::_1))
-    .then(lambda::bind(&__create, lambda::_1));
+    .repair(lambda::bind(&_create, urls));
 }
 
 
@@ -327,8 +334,8 @@ static Future<Option<Node>> __create(const Response& response)
 
 Future<Option<Node>> get(const URL& _url)
 {
-  // Transform the etcd URL into a vector of HTTP URLs.
-  vector<http::URL> urls;
+  // Transform the etcd URL into a deque of HTTP URLs.
+  deque<http::URL> urls;
 
   foreach (const URL::Server& server, _url.servers) {
     // TODO(benh): Use HTTPS after supported in libprocess.
@@ -339,11 +346,15 @@ Future<Option<Node>> get(const URL& _url)
     urls.push_back(url);
   }
 
-  return _get(urls);
+  // TODO(benh): See TODO in 'create' for randomizing ordering of URLs.
+
+  return _get(urls)
+    .then(lambda::bind(&parse, lambda::_1))
+    .then(lambda::bind(&__get, lambda::_1));
 }
 
 
-static Future<Option<Node>> _get(vector<http::URL> urls)
+static Future<http::Response> _get(deque<http::URL> urls)
 {
   if (urls.empty()) {
     return Failure("Exhaustively tried all etcd servers; giving up");
@@ -355,9 +366,7 @@ static Future<Option<Node>> _get(vector<http::URL> urls)
 
   // TODO(benh): Add connection timeout once supported by http::get.
   return http::get(url)
-    .repair(lambda::bind(&_get, urls))
-    .then(lambda::bind(&parse, lambda::_1))
-    .then(lambda::bind(&__get, lambda::_1));
+    .repair(lambda::bind(&_get, urls));
 }
 
 
@@ -381,11 +390,11 @@ static Future<Option<Node>> __get(const Response& response)
 
 
 Future<Option<Node>> watch(
-    const URL _url,
+    const URL& _url,
     const Option<uint64_t>& waitIndex)
 {
-  // Transform the etcd URL into a vector of HTTP URLs.
-  vector<http::URL> urls;
+  // Transform the etcd URL into a deque of HTTP URLs.
+  deque<http::URL> urls;
 
   foreach (const URL::Server& server, _url.servers) {
     // TODO(benh): Use HTTPS after supported in libprocess.
@@ -400,11 +409,15 @@ Future<Option<Node>> watch(
     urls.push_back(url);
   }
 
-  return _watch(urls);
+  // TODO(benh): See TODO in 'create' for randomizing ordering of URLs.
+
+  return _watch(urls)
+    .then(lambda::bind(&parse, lambda::_1))
+    .then(lambda::bind(&__watch, lambda::_1));
 }
 
 
-static Future<Option<Node>> _watch(vector<http::URL> urls)
+static Future<http::Response> _watch(deque<http::URL> urls)
 {
   if (urls.empty()) {
     return Failure("Exhaustively tried all etcd servers; giving up");
@@ -416,9 +429,7 @@ static Future<Option<Node>> _watch(vector<http::URL> urls)
 
   // TODO(benh): Add connection timeout once supported by http::get.
   return http::get(url)
-    .repair(lambda::bind(&_watch, urls))
-    .then(lambda::bind(&parse, lambda::_1))
-    .then(lambda::bind(&__watch, lambda::_1));
+    .repair(lambda::bind(&_watch, urls));
 }
 
 
