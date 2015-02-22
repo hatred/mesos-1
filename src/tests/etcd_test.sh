@@ -50,19 +50,21 @@ fi
 # Start etcd and make sure it exits when we do.
 ${ETCD} -data-dir=${WORK_DIR}/etcd &
 
-atexit "kill ${!}"
+ETCD_PID=${!}
+
+atexit "kill ${ETCD_PID}"
 
 echo "Started etcd"
 
 # Now give etcd a chance to come up properly so we can use etcdctl
 # without it failing because etcd isn't accepting connections yet.
-sleep 10
+sleep 5
 
 common_flags=(
   # List of nodes for replicated log. Tests using the default port (5050)
   # with the first entry.
   --ip=127.0.0.1
-  --masters=127.0.0.1,127.0.0.1:6060
+  --masters=127.0.0.1,127.0.0.1:6060,127.0.0.1:7070
   --etcd=etcd://127.0.0.1/v2/keys/mesos
 )
 
@@ -70,9 +72,9 @@ common_flags=(
 #${ETCDCTL} watch /mesos >/dev/null 2>&1 &
 ${ETCDCTL} watch /mesos &
 
-WATCH=${!}
+ETCDCTL_WATCH_PID=${!}
 
-atexit "kill ${WATCH}"
+atexit "kill ${ETCDCTL_WATCH_PID}"
 
 # First Mesos master, explicit quorum size. Should become leader in
 # election.
@@ -80,21 +82,21 @@ ${MESOS_BUILD_DIR}/src/mesos-master "${common_flags[@]}" \
   --quorum=2 \
   --work_dir="${WORK_DIR}/master1" &
 
-MASTER1=${!}
+MASTER1_PID=${!}
 
-atexit "kill ${MASTER1}"
+atexit "kill ${MASTER1_PID}"
 
 # Wait for the watch to terminate since the first master should become
 # elected on its own.
 # TODO(benh): This will BLOCK forever if we have a bug!
-wait ${WATCH}
+wait ${ETCDCTL_WATCH_PID}
 
 if [ "${?}" -ne 0 ]; then
   echo "Failed to wait for the first master to become elected"
   exit -1
 fi
 
-sleep 3
+sleep 1 # Wait for master to fully be elected (log recovered).
 
 # Check that the master has become elected.
 curl http://127.0.0.1:5050/stats.json | grep '"elected":1'
@@ -114,25 +116,26 @@ echo ${ETCD_MESOS_KEY}
 
 echo "---------------- FIRST MASTER ELECTED ----------------"
 
-
-
-
-
-# Again watch etcd so that we can check our expectations.
-${ETCDCTL} watch /mesos &
-
-WATCH=${!}
-
 # Now start a second Mesos master but let it determine the quorum size
 # implicitly based on --masters.
 ${MESOS_BUILD_DIR}/src/mesos-master "${common_flags[@]}" \
-  --quorum=2 \
   --work_dir="${WORK_DIR}/master2" \
   --port=6060 &
 
-MASTER2=${!}
+MASTER2_PID=${!}
 
-atexit "kill ${MASTER2}"
+atexit "kill ${MASTER2_PID}"
+
+# And finally start a third Mesos master because without at least 2 *
+# quorum + 1 masters we'll never be able to auto-initialize the log.
+${MESOS_BUILD_DIR}/src/mesos-master "${common_flags[@]}" \
+  --quorum=2 \
+  --work_dir="${WORK_DIR}/master3" \
+  --port=7070 &
+
+MASTER3_PID=${!}
+
+atexit "kill ${MASTER3_PID}"
 
 # And start a slave.
 ${MESOS_BUILD_DIR}/src/mesos-slave \
@@ -141,9 +144,13 @@ ${MESOS_BUILD_DIR}/src/mesos-slave \
   --work_dir="${WORK_DIR}/slave" \
   --port=5052 &
 
-atexit "kill ${!}"
+SLAVE_PID=${!}
 
-sleep 5 # Wait for the master to register and the slaves to recover.
+atexit "kill ${SLAVE_PID}"
+
+# Wait for the masters to perform log initialization and the slave to
+# (recover and) register.
+sleep 3
 
 # Now run the test framework using etcd to find the master.
 ${MESOS_BUILD_DIR}/src/test-framework --master=etcd://127.0.0.1/v2/keys/mesos
@@ -155,27 +162,68 @@ fi
 
 # Now shutdown the first master so that we can check that the second
 # master becomes the leader.
-kill ${MASTER1}
+kill ${MASTER1_PID}
+wait ${MASTER1_PID}
 
-# Wait for the watch to terminate since the second master should now
-# be becoming elected.
+echo "--------------- FIRST MASTER IS DEAD ---------------"
+
+# Now watch etcd to wait until the TTL expires and the first master is
+# no longer considered elected (otherwise when the first master comes
+# back online it will think it's elected again!).
 # TODO(benh): This will BLOCK forever if we have a bug!
-if [ `wait ${WATCH}` -ne 0 ]; then
-  echo "Failed to wait for the second master to become elected"
+${ETCDCTL} watch /mesos
+
+if [ "${?}" -ne 0 ]; then
+  echo "Failed to wait for the first master's etcd key to expire"
   exit -1
 fi
 
-# Check that the second master has become elected.
+echo "--------------- FIRST MASTER'S ETCD KEY EXPIRED ---------------"
+
+# Now watch etcd to wait until the second master gets elected.
+# TODO(benh): This will BLOCK forever if we have a bug!
+${ETCDCTL} watch /mesos
+
+if [ "${?}" -ne 0 ]; then
+  echo "Failed to wait for another master to become elected"
+  exit -1
+fi
+
+echo "--------------- SECOND/THIRD MASTER ELECTED ---------------"
+
+sleep 1 # Wait for master to fully be elected (log recovered).
+
+# Check that the second or third master has become elected.
 curl http://127.0.0.1:6060/stats.json | grep '"elected":1'
+if [ "${?}" -ne 0 ]; then
+  curl http://127.0.0.1:7070/stats.json | grep '"elected":1'
+  if [ "${?}" -ne 0 ]; then
+    echo "Expecting the third master to be elected!"
+    exit -1
+  fi
+fi
+
 
 # Restart the first master and check that it's not elected.
 ${MESOS_BUILD_DIR}/src/mesos-master "${common_flags[@]}" \
   --quorum=2 \
   --work_dir="${WORK_DIR}/master1" &
 
-MASTER1=${!}
+MASTER1_PID=${!}
 
-atexit "kill ${MASTER1}"
+atexit "kill ${MASTER1_PID}"
+
+# Wait for the first master to start.
+sleep 1
+
+# Check that the first master has NOT become elected.
+curl http://127.0.0.1:5050/stats.json | grep '"elected":0'
+
+if [ "${?}" -ne 0 ]; then
+  echo "Expecting the first master to NOT be elected!"
+  exit -1
+fi
+
 
 # Now re-run the test framework using etcd to find the master.
 ${MESOS_BUILD_DIR}/src/test-framework --master=etcd://127.0.0.1/v2/keys/mesos
@@ -185,6 +233,23 @@ if [ "${?}" -ne 0 ]; then
   exit -1
 fi
 
-# TODO(cmaloney): Test restarting etcd.
+
+
+# kill ${ETCD_PID}
+# wait ${ETCD_PID}
+
+# ${ETCD} -data-dir=${WORK_DIR}/etcd &
+
+# ETCD_PID=${!}
+
+# atexit "kill ${ETCD_PID}"
+
+# # And re-run the test framework using the restarted etcd.
+# ${MESOS_BUILD_DIR}/src/test-framework --master=etcd://127.0.0.1/v2/keys/mesos
+
+# if [ "${?}" -ne 0 ]; then
+#   echo "Expecting the test framework to exit successfully!"
+#   exit -1
+# fi
 
 # The atexit handlers will clean up the remaining masters/slaves/etcd.
