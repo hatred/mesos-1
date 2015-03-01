@@ -449,6 +449,13 @@ inline Deferred<void(void)> defer(const std::tr1::function<void(void)>& f)
 }
 
 
+#define TEMPLATE(Z, N, DATA)                                    \
+  typedef std::tr1::_Placeholder<INC(N)> _Placeholder ## N;
+
+  REPEAT(10, TEMPLATE, _)
+#undef TEMPLATE
+
+
 #define TEMPLATE(Z, N, DATA)                                            \
   template <ENUM_PARAMS(N, typename A)>                                 \
   Deferred<void(ENUM_PARAMS(N, A))> defer(                              \
@@ -464,6 +471,16 @@ inline Deferred<void(void)> defer(const std::tr1::function<void(void)>& f)
                                                                         \
   template <ENUM_PARAMS(N, typename A)>                                 \
   Deferred<void(ENUM_PARAMS(N, A))> defer(                              \
+      const UPID& pid,                                                  \
+      const std::tr1::_Bind<                                            \
+      void(*(ENUM_PARAMS(N, _Placeholder)))                             \
+      (ENUM_PARAMS(N, A))>& b)                                          \
+  {                                                                     \
+    return defer(pid, std::tr1::function<void(ENUM_PARAMS(N, A))>(b));  \
+  }                                                                     \
+                                                                        \
+  template <ENUM_PARAMS(N, typename A)>                                 \
+  Deferred<void(ENUM_PARAMS(N, A))> defer(                              \
       const std::tr1::function<void(ENUM_PARAMS(N, A))>& f)             \
   {                                                                     \
     if (__process__ != NULL) {                                          \
@@ -475,6 +492,15 @@ inline Deferred<void(void)> defer(const std::tr1::function<void(void)>& f)
     }                                                                   \
                                                                         \
     return __executor__->defer(f);                                      \
+  }                                                                     \
+                                                                        \
+  template <ENUM_PARAMS(N, typename A)>                                 \
+  Deferred<void(ENUM_PARAMS(N, A))> defer(                              \
+      const std::tr1::_Bind<                                            \
+      void(*(ENUM_PARAMS(N, _Placeholder)))                             \
+      (ENUM_PARAMS(N, A))>& b)                                          \
+  {                                                                     \
+    return defer(std::tr1::function<void(ENUM_PARAMS(N, A))>(b));       \
   }                                                                     \
                                                                         \
   template <typename R, ENUM_PARAMS(N, typename A)>                     \
