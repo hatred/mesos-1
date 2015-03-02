@@ -369,8 +369,7 @@ void ReplicaProcess::promise(const PromiseRequest& request)
 {
   // Ignore promise requests if this replica is not in VOTING status.
   if (status() != Metadata::VOTING) {
-    LOG(INFO) << "Replica ignoring promise request as it is in "
-              << status() << " status";
+    LOG(INFO) << "Replica ignoring promise request as it is in " << status();
     return;
   }
 
@@ -503,8 +502,7 @@ void ReplicaProcess::write(const WriteRequest& request)
 {
   // Ignore write requests if this replica is not in VOTING status.
   if (status() != Metadata::VOTING) {
-    LOG(INFO) << "Replica ignoring write request as it is in "
-              << status() << " status";
+    LOG(INFO) << "Replica ignoring write request as it is in " << status();
     return;
   }
 
@@ -639,7 +637,7 @@ void ReplicaProcess::write(const WriteRequest& request)
 void ReplicaProcess::recover(const RecoverRequest& request)
 {
   LOG(INFO) << "Replica in " << status()
-            << " status received a broadcasted recover request";
+            << " received a broadcasted recover request";
 
   RecoverResponse response;
   response.set_status(status());

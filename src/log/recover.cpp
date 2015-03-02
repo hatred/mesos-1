@@ -128,8 +128,8 @@ private:
 
   void start()
   {
-    VLOG(2) << "Starting to wait for enough quorum of replicas before running "
-            << "recovery protocol, expected quroum size: " << stringify(quorum);
+    LOG(INFO) << "Waiting for a quorum of replicas before running recovery "
+              << "protocol, expected quorum size is " << stringify(quorum);
 
     // Wait until there are enough (i.e., quorum of) replicas in the
     // network to avoid unnecessary retries.
@@ -193,7 +193,7 @@ private:
     const RecoverResponse& response = future.get();
 
     LOG(INFO) << "Received a recover response from a replica in "
-              << response.status() << " status";
+              << response.status();
 
     responsesReceived[response.status()]++;
 
@@ -335,8 +335,8 @@ private:
       // request while it is changing its status).
       static const Duration T = Milliseconds(500);
       Duration d = T * (1.0 + (double) ::random() / RAND_MAX);
-      VLOG(2) << "Didn't receive enough responses for recovery, retrying "
-              << "in " << stringify(d);
+      LOG(WARNING) << "Didn't receive enough responses for recovery, retrying "
+                   << "in " << stringify(d);
 
       delay(d, self(), &Self::start);
     } else {
