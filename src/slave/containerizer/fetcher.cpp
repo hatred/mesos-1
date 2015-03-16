@@ -290,180 +290,6 @@ static Try<Bytes> fetchSize(
 }
 
 
-static FetcherInfo::Item makeItem(
-    const CommandInfo::URI& uri,
-    const FetcherInfo::Item::Action& action,
-    const Option<string>& filename = None())
-{
-  FetcherInfo::Item item;
-
-  item.mutable_uri()->CopyFrom(uri);
-  item.set_action(action);
-
-  if (filename.isSome()) {
-    item.set_cache_filename(filename.get());
-  }
-
-  return item;
-}
-
-
-static FetcherInfo::Item bypassCache(const CommandInfo::URI& uri)
-{
-  VLOG(1) << "Bypassing cache for URI: " << uri.value();
-
-  return makeItem(uri, FetcherInfo::Item::BYPASS_CACHE);
-}
-
-
-static Future<FetcherInfo::Item> retrieveFromCache(
-    const CommandInfo::URI& uri,
-    const shared_ptr<FetcherProcess::Cache::Entry>& entry)
-{
-  VLOG(1) << "Retrieving URI from cache: " << uri.value();
-
-  return entry->future()
-    .then(lambda::bind(&makeItem,
-                       uri,
-                       FetcherInfo::Item::RETRIEVE_FROM_CACHE,
-                       entry->filename));
-}
-
-
-// Converts a "Try" result from async() to a future so that ".then()"
-// can work as needed. This is necessary because  "async(...).then(...)"
-// always ends up executing the ".then()" clause, unconditionally. Using
-// this adapter in the following way propagates error handling in the
-// expected manner common to ".then()" chains:
-// "async(...).then(lambda::bind(tryToFuture, lambda::_1)".
-template <typename T>
-static Future<T> tryToFuture(Try<T> value)
-{
-  if (value.isError()) {
-    return Failure(value.error());
-  }
-
-  return value.get();
-}
-
-
-Future<FetcherInfo::Item> FetcherProcess::downloadAndCache(
-    const CommandInfo::URI& uri,
-    const shared_ptr<Cache::Entry>& entry,
-    const string& cacheDirectory,
-    const Flags& flags)
-{
-  VLOG(1) << "Downloading and caching URI: " << uri.value();
-
-  return async(&fetchSize, uri.value(), flags.frameworks_home)
-    .then(lambda::bind(&tryToFuture<Bytes>, lambda::_1))
-    .then(defer(self(),
-                &FetcherProcess::reserveCacheSpace,
-                lambda::_1,
-                entry,
-                cacheDirectory))
-    .then(lambda::bind(&makeItem,
-                       uri,
-                       FetcherInfo::Item::DOWNLOAD_AND_CACHE,
-                       entry->filename));
-}
-
-
-list<Future<FetcherInfo::Item>> FetcherProcess::makeCacheItems(
-    const list<CommandInfo::URI>& uris,
-    shared_ptr<list<shared_ptr<Cache::Entry>>> referencedEntries,
-    shared_ptr<list<shared_ptr<Cache::Entry>>> newEntries,
-    const string& cacheDirectory,
-    const Option<string>& user,
-    const Flags& flags)
-{
-  list<Future<FetcherInfo::Item>> result;
-
-  foreach (const CommandInfo::URI& uri, uris) {
-    Option<shared_ptr<Cache::Entry>> entry = cache.getEntry(user, uri.value());
-
-    if (entry.isSome()) {
-      entry.get()->reference();
-      referencedEntries->push_back(entry.get());
-
-      result.push_back(retrieveFromCache(uri, entry.get()));
-    } else {
-      shared_ptr<Cache::Entry> newEntry =
-        cache.createEntry(cacheDirectory, user, uri);
-
-      newEntry->reference();
-      referencedEntries->push_back(newEntry);
-      newEntries->push_back(newEntry);
-
-      result.push_back(downloadAndCache(uri, newEntry, cacheDirectory, flags));
-    }
-  }
-
-  // Barrier for mock testing.
-  contentionBarrier();
-
-  return result;
-}
-
-
-// This is for testing only.
-void FetcherProcess::contentionBarrier() {
-}
-
-
-// Unwraps the given item futures and replaces items that failed fetch
-// preparation with fallback items that cause cache bypassing.
-static Future<list<FetcherInfo::Item>> applyFallbacks(
-    const list<Future<FetcherInfo::Item>>& items,
-    const list<CommandInfo::URI>& uris,
-    const Option<std::string>& user)
-{
-  list<FetcherInfo::Item> result;
-
-  CHECK_EQ(items.size(), uris.size());
-  list<CommandInfo::URI>::const_iterator uri = uris.begin();
-
-  foreach (const Future<FetcherInfo::Item>& item, items) {
-    if (item.isReady()) {
-      result.push_back(item.get());
-    } else {
-      CHECK(item.isFailed());
-
-      LOG(WARNING) << "Reverting to fetching directly into the sandbox for '"
-                   << uri->value()
-                   << "', due to failure to fetch through the cache, "
-                   << "with error: " << item.failure();
-
-      result.push_back(bypassCache(*uri));
-    }
-    uri++;
-  }
-
-  return result;
-}
-
-
-// Helper to unreference all cache entries touched during an
-// invocation of FetcherProcess::fetch.
-//
-// TODO(benh): Replace this with a C++11 lambda once it's introduced.
-static void unreference(
-    const Future<Nothing>&, // Necessary because 'defer' is insufficient.
-    const shared_ptr<list<shared_ptr<FetcherProcess::Cache::Entry>>>& entries)
-{
-  foreach (const shared_ptr<FetcherProcess::Cache::Entry>& entry, *entries) {
-    entry->unreference();
-  }
-}
-
-
-// TODO(bernd-mesos): Make this a local closure in C++11.
-static void logFailure(const string& message)
-{
-  LOG(ERROR) << message;
-}
-
-
 Future<Nothing> FetcherProcess::fetch(
     const ContainerID& containerId,
     const CommandInfo& commandInfo,
@@ -507,49 +333,172 @@ Future<Nothing> FetcherProcess::fetch(
     }
   }
 
-  list<FetcherInfo::Item> nonCacheItems;
-  list<CommandInfo::URI> cacheUris;
+  // For each URI we determine if we should use the cache and if so we
+  // try and either get the cache entry or create a cache entry. If
+  // we're getting the cache entry then we might need to wait for that
+  // cache entry to be downloaded. If we're creating a new cache entry
+  // then we need to properly reserve the cache space (and perform any
+  // evictions). Thus, there are three possibilities for each URI:
+  //
+  //   (1) We are not using the cache.
+  //   (2) We are using the cache but need to wait for an entry to be downloaded.
+  //   (3) We are using the cache and need to create a new entry.
+  //
+  // We capture whether or not we're using the cache using an Option
+  // as a value in a map, i.e., if we are not trying to use the cache
+  // as in (1) above then the Option is None otherwise as in (2) and
+  // (3) the Option is Some. And to capture the asynchronous nature of
+  // both (2) and (3) that Option holds a Future to the actual cache
+  // entry.
+  map<CommandInfo::URI, Option<Future<shared_ptr<Cache::Entry>>>> entries;
 
   foreach (const CommandInfo::URI& uri, commandInfo.uris()) {
-    if (uri.cache()) {
-      cacheUris.push_back(uri);
+    if (!uri.cache()) {
+      entries[uri] = None();
+      continue;
+    }
+
+    // Check if this is already in the cache (but not necessarily downloaded).
+    Option<shared_ptr<Cache::Entry>> entry = cache.getEntry(comandUser, uri);
+
+    if (entry.isSome()) {
+      entry.get()->reference();
+
+      Future<shared_ptr<Cache::Entry>> future = entry.get()->future()
+        .then(defer(self(), [entry] () {
+          return entry.get();
+        }));
+
+      entries[uri] = future;
     } else {
-      nonCacheItems.push_back(bypassCache(uri));
+      shared_ptr<Cache::Entry> newEntry =
+        cache.createEntry(cacheDirectory, commandUser, uri);
+
+      newEntry->reference();
+
+      Future<shared_ptr<Cache::Entry>> future =
+        async(&fetchSize, uri.value(), flags.frameworks_home)
+          .then(defer(self(), [newEntry, cacheDirectory] (const Try<Bytes>& bytes) {
+            Try<Nothing> reserve =
+              reserveCacheSpace(bytes, newEntry, cacheDirectory);
+
+            if (reserve.isSome()) {
+              return newEntry;
+            }
+
+            // Let anyone waiting on this future know that we've
+            // failed to download and they should bypass the cache
+            // (any new requests will try again).
+            newEntry->fail();
+            newEntry->dereference();
+            cache.removeEntry(newEntry);
+
+            return Failure("Failed to reserve space in the cache: " +
+                           reserve.error());
+          }));
+
+      entries[uri] = future;
     }
   }
 
-  auto referencedEntries = shared_ptr<list<shared_ptr<Cache::Entry>>>(
-      new list<shared_ptr<Cache::Entry>>());
+  // Get out all of the futures we need to wait for so we can wait on
+  // them together via 'await'.
+  //
+  // list<Future<shared_ptr<Cache::Entry>>> futures =
+  //   entries.filter([] (const Option<Future<shared_ptr<Cache::Entry>>>& entry) {
+  //     if (entry.isSome()) {
+  //       return entry.get();
+  //     }
+  //     return None();
+  // });
 
-  auto newEntries = shared_ptr<list<shared_ptr<Cache::Entry>>>(
-      new list<shared_ptr<Cache::Entry>>());
+  list<Future<shared_ptr<Cache::Entry>>> futures;
 
-  list<Future<FetcherInfo::Item>> cacheItems = makeCacheItems(
-      cacheUris,
-      referencedEntries,
-      newEntries,
-      cacheDirectory,
-      commandUser,
-      flags);
+  foreachvalue (const Option<Future<shared_ptr<Cache::Entry>>>& entry, entries) {
+    if (entry.isSome()) {
+      futures.push_back(entry.get());
+    }
+  }
 
-  return await(cacheItems)
-    .then(lambda::bind(&applyFallbacks, cacheItems, cacheUris, commandUser))
-    .then(defer(self(),
-                &FetcherProcess::_fetch,
-                containerId,
-                nonCacheItems,
-                lambda::_1,
-                sandboxDirectory,
-                cacheDirectory,
-                commandUser,
-                flags))
-    .onFailed(lambda::bind(logFailure, lambda::_1))
-    .onAny(defer(self(),
-      lambda::function<void(const Future<Nothing>&)>(
-          lambda::bind(&unreference, lambda::_1, referencedEntries))))
-    .onAny(defer(self(),
-                 &FetcherProcess::cleanupNewCacheEntries,
-                 newEntries));
+  return await(futures)
+    .then(defer(self(), [entries] () {
+      // Extract the cache entry if waiting on the future was
+      // successful, otherwise we'll assume we aren't (or can't) use
+      // the cache for this URI.
+      map<CommandInfo::URI, Option<shared_ptr<Cache::Entry>>> result;
+      foreachpair (const CommandInfo::URI& uri,
+                   const Option<Future<shared_ptr<Cache::Entry>>>& entry,
+                   entries) {
+        if (entry.isSome()) {
+          if (entry.get().isFailed()) {
+            LOG(WARNING) << "Reverting to fetching directly into the sandbox for '"
+                         << uri->value()
+                         << "', due to failure to fetch through the cache, "
+                         << "with error: " << item.failure();
+            result[uri] = None();
+          } else {
+            result[uri] = entry.get().get();
+          }
+        }
+      }
+      return result;
+    }))
+    .then(defer(self(), [] (const map<CommandInfo::URI, Option<shared_ptr<Cache::Entry>>>& entries) {
+      // Now construct the FetcherInfo based on which URIs we're using
+      // the cache for and which ones we are bypassing the cache.
+      FetcherInfo info;
+
+      info.set_sandbox_directory(sandboxDirectory);
+      info.set_cache_directory(cacheDirectory);
+
+      foreachpair (const CommandInfo::URI& uri,
+                   const Option<shared_ptr<Cache::Entry>>& entry,
+                   entries) {
+        if (entry.isSome()) {
+          if (entry.get()->future().isPending()) {
+            // FetcherInfo::Item DOWNLOAD_AND_CACHE
+          } else {
+            CHECK_READY(entry.get()->future());
+            // FetcherInfo::Item RETREIVE_FROM_CACHE
+          }
+        } else {
+          // FetcherInfo::Item BYPASS_CACHE
+        }
+      }
+
+      // ... info.set_user(...);
+      // ... info.set_frameworks_home(...)
+
+      return run(info, flags)
+        .repair(defer(self(), [entries] (const Future<Nothing>& future) {
+          LOG(ERROR) << "Failed to run mesos-fetcher: " << future.failure();
+
+          foreachvalue (const Option<shared_ptr<Cache::Entry>>& entry, entries) {
+            if (entry.get()->future().isPending()) {
+              // Unsuccessfully (or partially) downloaded! Remove from the cache.
+              entry.get()->fail();
+              deleteCacheEntry(entry.get()); // Might need to delete partial download.
+            } else {
+              // Unreference the entries we weren't downloading so
+              // that they can be evicted if necessary.
+              entry.get()->unreference();
+            }
+          }
+          return future; // Always propagate the failure!
+        }))
+        .then(defer(self(), [entries] () {
+          foreachvalue (const Option<shared_ptr<Cache::Entry>>& entry, entries) {
+            if (entry.get()->future().isPending()) {
+              // Successfully downloaded and cached!
+              entry.get()->complete();
+              adjustCacheSpace(entry.get());
+            }
+
+            // Unreference everything no matter what.
+            entry.get()->unreference();
+          }
+        }));
+    }));
 }
 
 
@@ -712,27 +661,6 @@ void FetcherProcess::adjustCacheSpace(
 }
 
 
-void FetcherProcess::cleanupNewCacheEntries(
-    const shared_ptr<list<shared_ptr<Cache::Entry>>>& newEntries)
-{
-  foreach (const shared_ptr<Cache::Entry>& entry, *newEntries) {
-    if (entry->future().isReady()) {
-      // Successful new download.
-    } else {
-      // We either failed to download this URI or we never tried
-      // and went into a fallback, bypassing the cache. In the latter
-      // case, we still have a successful fetcher run (which is why this
-      // method must be invoked "onAny" and not just "onFailure"), but
-      // this entry was not successfully completed.
-      VLOG(1) << "Cleaning up failed fetch for: " << entry->key;
-
-      entry->fail();
-      deleteCacheEntry(entry);
-    }
-  }
-}
-
-
 size_t FetcherProcess::countCacheFiles(
     const SlaveID& slaveId,
     const Flags& flags,
@@ -776,11 +704,15 @@ Bytes FetcherProcess::availableCacheSpace()
 
 // Returns quickly if there is enough space. Tries to evict cache files
 // to make space if there is not enough.
-Future<Nothing> FetcherProcess::reserveCacheSpace(
+Try<Nothing> FetcherProcess::reserveCacheSpace(
     const Try<Bytes>& requestedSpace,
     const shared_ptr<FetcherProcess::Cache::Entry>& entry,
     const string& cacheDirectory)
 {
+  if (requestedSpace.isError()) {
+    return Error("Failed to get requested space: " + requestedSpace.error());
+  }
+
   if (cache.availableSpace() < requestedSpace.get()) {
     Bytes missingSpace = requestedSpace.get() - cache.availableSpace();
 
