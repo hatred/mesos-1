@@ -16,6 +16,7 @@
 
 #include <stout/duration.hpp>
 #include <stout/foreach.hpp>
+#include <stout/fs.hpp>
 #include <stout/gtest.hpp>
 #include <stout/hashmap.hpp>
 #include <stout/hashset.hpp>
@@ -202,6 +203,33 @@ TEST_F(OsTest, readWriteString)
 
   ASSERT_SOME(readstr);
   EXPECT_EQ(teststr, readstr.get());
+}
+
+
+TEST_F(OsTest, size)
+{
+  const string& file  = path::join(os::getcwd(), UUID::random().toString());
+  const string& link = path::join(os::getcwd(), UUID::random().toString());
+
+  const Bytes fileSize = 1053;
+
+  string s(fileSize.bytes(), 'X');
+  ASSERT_SOME(os::write(file, s));
+
+  // The reported file size should be the same whether following links
+  // or not, given that the input parameter is not a link.
+  EXPECT_SOME_EQ(fileSize, os::stat::size(file, true));
+  EXPECT_SOME_EQ(fileSize, os::stat::size(file, false));
+
+  EXPECT_ERROR(os::stat::size("aFileThatDoesNotExist"));
+
+  ASSERT_SOME(fs::symlink(file, link));
+
+  // Following links we expect the file's size, not the link's.
+  EXPECT_SOME_EQ(fileSize, os::stat::size(link, true));
+
+  // Not following links, we expect the string length of the linked path.
+  EXPECT_SOME_EQ(Bytes(file.size()), os::stat::size(link, false));
 }
 
 

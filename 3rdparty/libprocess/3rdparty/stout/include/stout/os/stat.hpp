@@ -58,6 +58,27 @@ inline bool islink(const std::string& path)
 }
 
 
+// Returns the size in Bytes of a given file system entry. When applied
+// on a symbolic link, while having `followSymlinks` disabled, this
+// will return the length of the entry name (strlen).
+inline Try<Bytes> size(const std::string& path, bool followSymLinks = true)
+{
+  struct stat s;
+
+  if (followSymLinks) {
+    if (::stat(path.c_str(), &s) < 0) {
+      return ErrnoError("Error invoking stat for '" + path + "'");
+    }
+  } else {
+    if (::lstat(path.c_str(), &s) < 0) {
+      return ErrnoError("Error invoking lstat for '" + path + "'");
+    }
+  }
+
+  return Bytes(s.st_size);
+}
+
+
 inline Try<long> mtime(const std::string& path)
 {
   struct stat s;
