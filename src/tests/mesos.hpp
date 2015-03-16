@@ -27,6 +27,8 @@
 #include <mesos/executor.hpp>
 #include <mesos/scheduler.hpp>
 
+#include <mesos/fetcher/fetcher.hpp>
+
 #include <process/future.hpp>
 #include <process/gmock.hpp>
 #include <process/gtest.hpp>
@@ -38,6 +40,7 @@
 #include <stout/foreach.hpp>
 #include <stout/gtest.hpp>
 #include <stout/lambda.hpp>
+#include <stout/memory.hpp>
 #include <stout/none.hpp>
 #include <stout/option.hpp>
 #include <stout/stringify.hpp>
@@ -57,7 +60,7 @@
 
 #include "slave/containerizer/containerizer.hpp"
 
-#include "slave/containerizer/mesos/containerizer.hpp"
+#include "slave/containerizer/mesos/
 
 #include "tests/cluster.hpp"
 #include "tests/limiter.hpp"
@@ -85,6 +88,7 @@ class MesosTest : public TemporaryDirectoryTest
 protected:
   MesosTest(const Option<zookeeper::URL>& url = None());
 
+  virtual void SetUp();
   virtual void TearDown();
 
   // Returns the flags used to create masters.
@@ -728,6 +732,34 @@ private:
   Files files;
   MockGarbageCollector gc;
   slave::StatusUpdateManager* statusUpdateManager;
+};
+
+
+// Definition of a mock FetcherProcess to be used in tests with gmock.
+class MockFetcherProcess : public slave::FetcherProcess
+{
+public:
+  MockFetcherProcess();
+
+  virtual ~MockFetcherProcess() {}
+
+  MOCK_METHOD0(contentionBarrier, void());
+
+  void unmocked_contentionBarrier();
+
+  MOCK_METHOD2(run, Try<process::Subprocess>(
+      const FetcherInfo& fetcherInfo,
+      const slave::Flags& flags));
+
+  Try<process::Subprocess> unmocked_run(
+      const FetcherInfo& fetcherInfo,
+      const slave::Flags& flags);
+
+  MOCK_METHOD1(deleteCacheEntry, Try<Nothing>(
+      const memory::shared_ptr<Cache::Entry>& cacheEntry));
+
+  Try<Nothing> unmocked_deleteCacheEntry(
+      const memory::shared_ptr<Cache::Entry>& cacheEntry);
 };
 
 

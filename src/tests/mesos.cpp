@@ -50,7 +50,10 @@
 
 using memory::shared_ptr;
 
+using std::list;
 using std::string;
+using std::vector;
+
 using testing::_;
 using testing::Invoke;
 
@@ -70,6 +73,12 @@ Option<zookeeper::URL> MesosZooKeeperTest::url;
 #endif // MESOS_HAS_JAVA
 
 MesosTest::MesosTest(const Option<zookeeper::URL>& url) : cluster(url) {}
+
+
+void MesosTest::SetUp()
+{
+  TemporaryDirectoryTest::SetUp();
+}
 
 
 void MesosTest::TearDown()
@@ -141,6 +150,7 @@ slave::Flags MesosTest::CreateSlaveFlags()
   CHECK_SOME(directory) << "Failed to create temporary directory";
 
   flags.work_dir = directory.get();
+  flags.fetcher_cache_dir = path::join(directory.get(), "fetch");
 
   flags.launcher_dir = path::join(tests::flags.build_dir, "src");
 
@@ -432,6 +442,41 @@ void MockSlave::unmocked_removeFramework(slave::Framework* framework)
 void MockSlave::unmocked___recover(const Future<Nothing>& future)
 {
   slave::Slave::__recover(future);
+}
+
+
+MockFetcherProcess::MockFetcherProcess()
+{
+  // Set up default behaviors, calling the original methods.
+  EXPECT_CALL(*this, contentionBarrier()).
+    WillRepeatedly(
+        Invoke(this, &MockFetcherProcess::unmocked_contentionBarrier));
+  EXPECT_CALL(*this, run(_, _)).
+    WillRepeatedly(Invoke(this, &MockFetcherProcess::unmocked_run));
+  EXPECT_CALL(*this, deleteCacheEntry(_)).
+    WillRepeatedly(
+        Invoke(this, &MockFetcherProcess::unmocked_deleteCacheEntry));
+}
+
+
+void MockFetcherProcess::unmocked_contentionBarrier()
+{
+  return slave::FetcherProcess::contentionBarrier();
+}
+
+
+Try<process::Subprocess> MockFetcherProcess::unmocked_run(
+    const FetcherInfo& fetcherInfo,
+    const slave::Flags& flags)
+{
+  return slave::FetcherProcess::run(fetcherInfo, flags);
+}
+
+
+Try<Nothing> MockFetcherProcess::unmocked_deleteCacheEntry(
+      const shared_ptr<Cache::Entry>& cacheEntry)
+{
+  return slave::FetcherProcess::deleteCacheEntry(cacheEntry);
 }
 
 

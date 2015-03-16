@@ -222,7 +222,8 @@ DockerContainerizerProcess::Container::create(
 
 
 Future<Nothing> DockerContainerizerProcess::fetch(
-    const ContainerID& containerId)
+    const ContainerID& containerId,
+    const SlaveID& slaveId)
 {
   CHECK(containers_.contains(containerId));
   Container* container = containers_[containerId];
@@ -232,6 +233,7 @@ Future<Nothing> DockerContainerizerProcess::fetch(
       container->command(),
       container->directory,
       None(),
+      slaveId,
       flags);
 }
 
@@ -583,7 +585,7 @@ Future<bool> DockerContainerizerProcess::launch(
             << "' (and executor '" << executorInfo.executor_id()
             << "') of framework '" << executorInfo.framework_id() << "'";
 
-  return fetch(containerId)
+  return fetch(containerId, slaveId)
     .then(defer(self(), &Self::_launch, containerId))
     .then(defer(self(), &Self::__launch, containerId))
     .then(defer(self(), &Self::___launch, containerId))
@@ -756,7 +758,7 @@ Future<bool> DockerContainerizerProcess::launch(
             << "' for executor '" << executorInfo.executor_id()
             << "' and framework '" << executorInfo.framework_id() << "'";
 
-  return fetch(containerId)
+  return fetch(containerId, slaveId)
     .then(defer(self(), &Self::_launch, containerId))
     .then(defer(self(), &Self::__launch, containerId))
     .then(defer(self(), &Self::____launch, containerId))

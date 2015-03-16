@@ -780,6 +780,12 @@ void Slave::registered(const UPID& from, const SlaveID& slaveId)
       LOG(INFO) << "Registered with master " << master.get()
                 << "; given slave ID " << slaveId;
 
+      Try<Nothing> recovered = Fetcher::recoverCache(slaveId, flags);
+      if (recovered.isError()) {
+          LOG(FATAL) << "Could not initialize fetcher cache: "
+                     << recovered.error();
+      }
+
       state = RUNNING;
 
       statusUpdateManager->resume(); // Resume status updates.
@@ -3594,7 +3600,6 @@ void Slave::_checkDiskUsage(const Future<double>& usage)
 }
 
 
-
 Future<Nothing> Slave::recover(const Result<state::State>& state)
 {
   if (state.isError()) {
@@ -3664,6 +3669,11 @@ Future<Nothing> Slave::recover(const Result<state::State>& state)
                    << slaveState.get().errors;
 
       metrics.recovery_errors += slaveState.get().errors;
+    }
+
+    Try<Nothing> recovered = Fetcher::recoverCache(slaveState.get().id, flags);
+    if (recovered.isError()) {
+      return Failure(recovered.error());
     }
 
     // Recover the frameworks.
