@@ -492,7 +492,17 @@ Future<Nothing> FetcherProcess::fetch(
             if (entry.get()->future().isPending()) {
               // Successfully downloaded and cached!
               entry.get()->complete();
-              adjustCacheSpace(entry.get());
+
+              // Attempt to adjust the cache size based on the actual
+              // size of the downloaded entry.
+              Try<Nothing> adjust = cache.adjust(entry.get());
+
+              if (adjust.isError()) {
+                LOG(WARNING) << "Failed to adjust the cache size for entry ...";
+                entry.get()->unreference();
+                cache.remove(entry);
+                continue; // Since we don't need/want to unreference _again_ below.
+              }
             }
 
             // Unreference everything no matter what.
@@ -578,7 +588,7 @@ Future<Nothing> FetcherProcess::__fetch(
       VLOG(1) << "Downloaded URI to cache: " << item.uri().value();
 
       entry.get()->complete();
-      adjustCacheSpace(entry.get());
+      cache.adjust(entry.get());
     }
   }
 
@@ -611,29 +621,6 @@ static off_t delta(
   }
 
   return 0;
-}
-
-
-void FetcherProcess::adjustCacheSpace(
-    const shared_ptr<FetcherProcess::Cache::Entry>& entry)
-{
-  Try<Bytes> size = os::stat::size(entry.get()->path().value, false);
-  if (size.isSome()) {
-    off_t d = delta(size.get(), entry);
-    if (d < 0) {
-      cache.releaseSpace(Bytes(d));
-    } else {
-      // This could be bad. See claimSpace() for further details.
-      cache.claimSpace(Bytes(d));
-    }
-  } else {
-    // This should never be caused by Mesos itself, but cannot be excluded.
-    LOG(ERROR) << "Fetcher cache file for '" << entry->key
-               << "' disappeared from :" << entry->path();
-
-    // Best effort to recover from this.
-    cache.remove(entry);
-  }
 }
 
 
@@ -853,6 +840,35 @@ bool FetcherProcess::Cache::containsEntry(
 {
   return getEntry(user, uri).isSome();
 }
+
+
+Try<Nothing> FetcherProcess::Cache::adjust(
+    const shared_ptr<FetcherProcess::Cache::Entry>& entry)
+{
+  CHECK(... that the entry is in the table ...);
+
+  // If we're adjusting the cache size then it should be the case that
+  // we've already downloaded this entry.
+  CHECK_READY(entry->future());
+
+  Try<Bytes> size = os::stat::size(entry.get()->path().value, false);
+
+  if (size.isSome()) {
+    off_t d = delta(size.get(), entry);
+    if (d < 0) {
+      releaseSpace(Bytes(d));
+    } else {
+      return Error("More cache size now necessary, not adjusting");
+    }
+  } else {
+    // This should never be caused by Mesos itself, but cannot be excluded.
+    return Error("Fetcher cache file for '" + entry->key +
+                 "' disappeared from: " + entry->path().value);
+  }
+
+  return Nothing();
+}
+
 
 
 Try<Nothing> FetcherProcess::Cache::remove(
