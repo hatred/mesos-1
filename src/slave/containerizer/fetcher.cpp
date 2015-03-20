@@ -380,9 +380,7 @@ Future<Nothing> FetcherProcess::fetch(
         async(&fetchSize, uri.value(), flags.frameworks_home)
           .then(defer(self(), [newEntry, cacheDirectory] (const Try<Bytes>& bytes) {
             if (bytes.isSome()) {
-              newEntry->size = bytes.get()
-
-              Try<Nothing> reserve = cache.reserve(newEntry);
+              Try<Nothing> reserve = cache.reserve(newEntry, bytes.get());
 
               if (reserve.isSome()) {
                 return newEntry;
@@ -394,7 +392,7 @@ Future<Nothing> FetcherProcess::fetch(
             // (any new requests will try again).
             newEntry->fail();
             newEntry->dereference();
-            cache.removeEntry(newEntry);
+            cache.remove(newEntry);
 
             return Failure("Failed to reserve space in the cache: " +
                            reserve.error());
@@ -480,7 +478,7 @@ Future<Nothing> FetcherProcess::fetch(
             if (entry.get()->future().isPending()) {
               // Unsuccessfully (or partially) downloaded! Remove from the cache.
               entry.get()->fail();
-              deleteCacheEntry(entry.get()); // Might need to delete partial download.
+              cache.remove(entry.get()); // Might need to delete partial download.
             } else {
               // Unreference the entries we weren't downloading so
               // that they can be evicted if necessary.
@@ -502,31 +500,6 @@ Future<Nothing> FetcherProcess::fetch(
           }
         }));
     }));
-}
-
-
-Try<Nothing> FetcherProcess::deleteCacheEntry(
-    const shared_ptr<Cache::Entry>& entry)
-{
-  VLOG(1) << "Deleting cache entry: " << entry->key;
-
-  cache.removeEntry(entry);
-
-  if (entry->future().isReady()) {
-    Try<Nothing> rm = os::rm(entry->path().value);
-    if (rm.isError()) {
-      return Error("Could not delete fetcher cache file '" +
-                   entry->path().value + "' with error: " + rm.error() +
-                   " for entry '" + entry->key +
-                   "', leaking cache space: " + stringify(entry->size));
-    }
-  }
-
-  if (entry->size > 0) {
-    cache.releaseSpace(entry->size);
-  }
-
-  return Nothing();
 }
 
 
@@ -659,7 +632,7 @@ void FetcherProcess::adjustCacheSpace(
                << "' disappeared from :" << entry->path();
 
     // Best effort to recover from this.
-    deleteCacheEntry(entry);
+    cache.remove(entry);
   }
 }
 
@@ -882,22 +855,72 @@ bool FetcherProcess::Cache::containsEntry(
 }
 
 
-void FetcherProcess::Cache::removeEntry(
-    shared_ptr<FetcherProcess::Cache::Entry> entry)
-{
-  VLOG(1) << "Removing cache entry '" << entry->key
-          << "' with filename: " << entry->filename;
-
-  table.erase(entry->key);
-}
-
-
-Try<Nothing> FetcherProcess::Cache::reserve(const shared_ptr<Cache::Entry>& entry)
+Try<Nothing> FetcherProcess::Cache::remove(
+    const shared_ptr<Cache::Entry>& entry)
 {
   CHECK(... that the entry is in the table ...);
 
-  if (availableSpace() < entry->size)) {
-    Bytes missingSpace = entry->size - availableSpace();
+  VLOG(1) << "Attempting to remove cache entry '" << entry->key
+          << "' with filename: " << entry->filename;
+
+  // We're removing an entry if:
+  //
+  //   (1) We failed to download it when invoking the mesos-fetcher.
+  //   (2) We're evicting it to make room for another entry.
+  //
+  // In (1) the contract is that we'll have failed the entry's future
+  // before we call remove, so the entry's future should no longer be
+  // pending.
+  //
+  // In (2) it should be the case that the future is no longer pending
+  // because we shouldn't be able to evict something if we're
+  // currently downloading it because it should have a non-zero
+  // reference count and therefore the future must either be ready or
+  // failed in which case this is just case (1) above.
+  CHECK(!entry->future().isPending());
+
+  // NOTE: It is not necessarily the case that this cache entry has
+  // zero references because there might be some waiters on the
+  // downloading of this entry which haven't been able to run and find
+  // out that the downloading failed.
+
+  // We want to attempt to delete the file regardless of if it
+  // downloaded since it might have downloaded partially! Deleting
+  // this file should not be racing with any other downloading or
+  // deleting because all calls into the cache are serialized by the
+  // FetcherProcess and since this entry is already in the cache there
+  // should not be any other conflicting entries or files representing
+  // this entry.
+  Try<Nothing> rm = os::rm(entry->path().value);
+
+  if (rm.isError()) {
+    return Error("Could not delete fetcher cache file '" +
+                 entry->path().value + "' with error: " + rm.error() +
+                 " for entry '" + entry->key +
+                 "', leaking cache space: " + stringify(entry->size));
+  }
+
+  // NOTE: There is a very nasty implicit assumption that if and only
+  // if 'entry->size > 0' then we've claimed cache space for this
+  // entry! This currently only gets set in Cache::reserve.
+  if (entry->size > 0) {
+    releaseSpace(entry->size);
+  }
+
+  table.erase(entry->key);
+
+  return Nothing();
+}
+
+
+Try<Nothing> FetcherProcess::Cache::reserve
+      const shared_ptr<Cache::Entry>& entry,
+      const Bytes& bytes)
+{
+  CHECK(... that the entry is in the table ...);
+
+  if (availableSpace() < bytes)) {
+    Bytes missingSpace = bytes - availableSpace();
 
     VLOG(1) << "Attempting to evict entries in order to free up "
             << missingSpace << " fetcher cache space";
@@ -910,16 +933,20 @@ Try<Nothing> FetcherProcess::Cache::reserve(const shared_ptr<Cache::Entry>& entr
     }
 
     foreach (const shared_ptr<Cache::Entry>& victim, victims.get()) {
-      Try<Nothing> deletion = deleteCacheEntry(victim);
+      Try<Nothing> deletion = remove(victim);
       if (deletion.isError()) {
         return deletion;
       }
     }
   }
 
-  CHECK(availableSpace() >= entry->size);
+  CHECK(availableSpace() >= bytes);
 
-  claimSpace(entry->size);
+  claimSpace(bytes);
+
+  // NOTE: Need to set the entry size only afte we've claimed space!
+  // Other functions rely on these semantics (e.g., Cache::remove).
+  entry->size = bytes;
 
   return Nothing();
 }
