@@ -379,11 +379,14 @@ Future<Nothing> FetcherProcess::fetch(
       Future<shared_ptr<Cache::Entry>> future =
         async(&fetchSize, uri.value(), flags.frameworks_home)
           .then(defer(self(), [newEntry, cacheDirectory] (const Try<Bytes>& bytes) {
-            Try<Nothing> reserve =
-              reserveCacheSpace(bytes, newEntry, cacheDirectory);
+            if (bytes.isSome()) {
+              newEntry->size = bytes.get()
 
-            if (reserve.isSome()) {
-              return newEntry;
+              Try<Nothing> reserve = cache.reserve(newEntry);
+
+              if (reserve.isSome()) {
+                return newEntry;
+              }
             }
 
             // Let anyone waiting on this future know that we've
@@ -702,48 +705,6 @@ Bytes FetcherProcess::availableCacheSpace()
 }
 
 
-// Returns quickly if there is enough space. Tries to evict cache files
-// to make space if there is not enough.
-Try<Nothing> FetcherProcess::reserveCacheSpace(
-    const Try<Bytes>& requestedSpace,
-    const shared_ptr<FetcherProcess::Cache::Entry>& entry,
-    const string& cacheDirectory)
-{
-  if (requestedSpace.isError()) {
-    return Error("Failed to get requested space: " + requestedSpace.error());
-  }
-
-  if (cache.availableSpace() < requestedSpace.get()) {
-    Bytes missingSpace = requestedSpace.get() - cache.availableSpace();
-
-    VLOG(1) << "Freeing up " << missingSpace << " fetcher cache space for: "
-            << entry->key;
-
-    const Try<list<shared_ptr<Cache::Entry>>>& victims =
-      cache.selectVictims(missingSpace);
-
-    if (victims.isError()) {
-      return Failure("Could not free up enough fetcher cache space");
-    }
-
-    foreach (const shared_ptr<Cache::Entry>& entry, victims.get()) {
-      Try<Nothing> deletion = deleteCacheEntry(entry);
-      if (deletion.isError()) {
-        return deletion;
-      }
-    }
-  }
-
-  VLOG(1) << "Claiming fetcher cache space for: " << entry->key;
-
-  cache.claimSpace(requestedSpace.get());
-
-  entry->size = requestedSpace.get();
-
-  return Nothing();
-}
-
-
 Try<Subprocess> FetcherProcess::run(
     const FetcherInfo& fetcherInfo,
     const Flags& flags)
@@ -928,6 +889,39 @@ void FetcherProcess::Cache::removeEntry(
           << "' with filename: " << entry->filename;
 
   table.erase(entry->key);
+}
+
+
+Try<Nothing> FetcherProcess::Cache::reserve(const shared_ptr<Cache::Entry>& entry)
+{
+  CHECK(... that the entry is in the table ...);
+
+  if (availableSpace() < entry->size)) {
+    Bytes missingSpace = entry->size - availableSpace();
+
+    VLOG(1) << "Attempting to evict entries in order to free up "
+            << missingSpace << " fetcher cache space";
+
+    const Try<list<shared_ptr<Cache::Entry>>>& victims =
+      selectVictims(missingSpace);
+
+    if (victims.isError()) {
+      return Failure("Could not free up enough fetcher cache space");
+    }
+
+    foreach (const shared_ptr<Cache::Entry>& victim, victims.get()) {
+      Try<Nothing> deletion = deleteCacheEntry(victim);
+      if (deletion.isError()) {
+        return deletion;
+      }
+    }
+  }
+
+  CHECK(availableSpace() >= entry->size);
+
+  claimSpace(entry->size);
+
+  return Nothing();
 }
 
 
