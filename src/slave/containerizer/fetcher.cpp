@@ -365,6 +365,12 @@ Future<Nothing> FetcherProcess::fetch(
       entry.get()->reference();
 
       Future<shared_ptr<Cache::Entry>> future = entry.get()->future()
+        .repair(defer(self(), [entry] (const Future<...>& future) {
+          // Unreference the entry so that it can be evicted and then
+          // just propagate the failure.
+          entry.get()->unreference();
+          return future;
+        }))
         .then(defer(self(), [entry] () {
           return entry.get();
         }));
@@ -391,7 +397,7 @@ Future<Nothing> FetcherProcess::fetch(
             // failed to download and they should bypass the cache
             // (any new requests will try again).
             newEntry->fail();
-            newEntry->dereference();
+            newEntry->unreference();
             cache.remove(newEntry);
 
             return Failure("Failed to reserve space in the cache: " +
@@ -478,6 +484,7 @@ Future<Nothing> FetcherProcess::fetch(
             if (entry.get()->future().isPending()) {
               // Unsuccessfully (or partially) downloaded! Remove from the cache.
               entry.get()->fail();
+              entry.get()->unreference();
               cache.remove(entry.get()); // Might need to delete partial download.
             } else {
               // Unreference the entries we weren't downloading so
