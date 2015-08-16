@@ -19,6 +19,13 @@
 
 #include <string>
 
+// For readability, we minimize the number of #ifdef blocks in the code by
+// splitting platform specifc system calls into separate directories.
+#ifdef __WINDOWS__
+#include <stout/windows/error.hpp>
+#endif // __WINDOWS__
+
+
 // A useful type that can be used to represent a Try that has
 // failed. You can also use 'ErrnoError' to append the error message
 // associated with the current 'errno' to your own error message.
