@@ -56,7 +56,7 @@ void read(
   } else if (future.isFailed()) {
     promise->fail(future.failure());
   } else {
-    ssize_t length = ::read(fd, data, size);
+    ssize_t length = os::read(fd, data, size);
     if (length < 0) {
       if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
         // Restart the read operation.
@@ -124,7 +124,7 @@ void write(
     bool pending = os::signals::pending(SIGPIPE);
     bool unblock = !pending ? os::signals::block(SIGPIPE) : false;
 
-    ssize_t length = ::write(fd, data, size);
+    ssize_t length = os::write(fd, data, size);
 
     // Save the errno so we can restore it after doing sig* functions
     // below.

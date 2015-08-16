@@ -230,7 +230,7 @@ TEST(IOTest, DISABLED_BlockingWrite)
   // Determine the pipe buffer size by writing until we block.
   size_t size = 0;
   ssize_t length = 0;
-  while ((length = ::write(pipes[1], "data", 4)) >= 0) {
+  while ((length = os::write(pipes[1], "data", 4)) >= 0) {
     size += length;
   }
 
