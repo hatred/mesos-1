@@ -23,6 +23,60 @@
 // Network utilities.
 namespace net {
 
+inline void initialize()
+{
+  static bool initialized = []() {
+    WSADATA data = {0};
+    if (WSAStartup(MAKEWORD(2, 2), &data) != 0) {
+      ABORT("Could not initialize Windows networking");
+    }
+    return true;
+  }();
+}
+
+
+inline bool isSocket(int fd)
+{
+  initialize();
+
+  // We use an 'int' but expect a SOCKET if this is Windows.
+  static_assert(sizeof(SOCKET) == sizeof(int), "Can not use int for SOCKET");
+
+  int value = 0;
+  int length = sizeof(int);
+
+  if (::getsockopt(
+          fd,
+          SOL_SOCKET,
+          SO_TYPE,
+          (char*) &value,
+          &length) == SOCKET_ERROR) {
+    switch (WSAGetLastError()) {
+      case WSAENOTSOCK:
+        return false;
+      default:
+        // TODO(benh): Handle `WSANOTINITIALISED`
+        ABORT("Not expecting 'getsockopt' to fail when passed a valid socket");
+    }
+  }
+
+  return true;
+}
+
+
+inline Try<int> socket(int family, int type, int protocol)
+{
+  initialize();
+
+  SOCKET s = ::socket(family, type, protocol);
+  if (s == INVALID_SOCKET) {
+    return WSAError();
+  }
+
+  return s;
+}
+
+
 // Downloads the header of the specified HTTP URL with a HEAD request
 // and queries its "content-length" field. (Note that according to the
 // HTTP specification there is no guarantee that this field contains
