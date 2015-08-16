@@ -88,6 +88,7 @@
 #ifdef __APPLE__
 #include <stout/os/sysctl.hpp>
 #endif // __APPLE__
+#include <stout/os/write.hpp>
 
 
 // For readability, we minimize the number of #ifdef blocks in the code by

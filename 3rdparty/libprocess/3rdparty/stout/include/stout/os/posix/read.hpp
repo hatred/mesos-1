@@ -30,6 +30,11 @@
 
 namespace os {
 
+inline ssize_t read(int fd, void* data, size_t size)
+{
+  return ::read(fd, data, size);
+}
+
 // Reads 'size' bytes from a file from its current offset.
 // If EOF is encountered before reading 'size' bytes then the result
 // will contain the bytes read and a subsequent read will return None.

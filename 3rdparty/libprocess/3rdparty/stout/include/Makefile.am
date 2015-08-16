@@ -74,6 +74,7 @@ nobase_include_HEADERS =		\
   stout/os/posix/shell.hpp		\
   stout/os/posix/signals.hpp		\
   stout/os/posix/stat.hpp		\
+  stout/os/posix/write.hpp		\
   stout/os/ls.hpp			\
   stout/os/open.hpp			\
   stout/os/os.hpp			\
@@ -88,6 +89,7 @@ nobase_include_HEADERS =		\
   stout/os/permissions.hpp		\
   stout/os/pstree.hpp			\
   stout/os/sysctl.hpp			\
+  stout/os/write.hpp			\
   stout/os/windows/close.hpp		\
   stout/os/windows/exists.hpp		\
   stout/os/windows/fcntl.hpp		\
@@ -103,6 +105,7 @@ nobase_include_HEADERS =		\
   stout/os/windows/shell.hpp		\
   stout/os/windows/signals.hpp		\
   stout/os/windows/stat.hpp		\
+  stout/os/windows/write.hpp		\
   stout/path.hpp			\
   stout/preprocessor.hpp		\
   stout/proc.hpp			\

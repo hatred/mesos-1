@@ -11,48 +11,27 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __STOUT_OS_WINDOWS_READ_HPP__
-#define __STOUT_OS_WINDOWS_READ_HPP__
+#ifndef __STOUT_OS_WINDOWS_WRITE_HPP__
+#define __STOUT_OS_WINDOWS_WRITE_HPP__
 
 #include <stdio.h>
-
-#include <string>
-
-#include <stout/result.hpp>
-#include <stout/try.hpp>
 
 #include <stout/windows/net.hpp>
 
 namespace os {
 
-inline ssize_t read(int fd, void* data, size_t size)
+inline ssize_t write(int fd, const void* data, size_t size)
 {
   // TODO(benh): Map any Windows specific return code semantics from
-  // either `recv` or `_read` into POSIX semantics (i.e., what the
+  // either `send` or `_write` into POSIX semantics (i.e., what the
   // callee will be checking for).
   if (isSocket(fd)) {
-    return recv(fd, data, size, 0);
+    return send(fd, data, size, 0);
   }
 
-  return ::_read(fd, data, size);
-}
-
-
-// Reads 'size' bytes from a file from its current offset.
-// If EOF is encountered before reading 'size' bytes then the result
-// will contain the bytes read and a subsequent read will return None.
-inline Result<std::string> read(int fd, size_t size)
-{
-  UNIMPLEMENTED;
-}
-
-
-// Returns the contents of the file.
-inline Try<std::string> read(const std::string& path)
-{
-  UNIMPLEMENTED;
+  return ::_write(fd, data, size);
 }
 
 } // namespace os {
 
-#endif // __STOUT_OS_WINDOWS_READ_HPP__
+#endif // __STOUT_OS_WINDOWS_WRITE_HPP__
