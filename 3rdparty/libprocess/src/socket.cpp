@@ -19,9 +19,10 @@
 
 #include <boost/shared_array.hpp>
 
-#include <process/network.hpp>
 #include <process/owned.hpp>
 #include <process/socket.hpp>
+
+#include <stout/net.hpp>
 
 #ifdef USE_SSL_SOCKET
 #include "libevent_ssl_socket.hpp"
@@ -40,13 +41,13 @@ Try<Socket> Socket::create(Kind kind, int s)
     // Supported in Linux >= 2.6.27.
 #if defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
     Try<int> fd =
-      network::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+      net::socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 
     if (fd.isError()) {
       return Error("Failed to create socket: " + fd.error());
     }
 #else
-    Try<int> fd = network::socket(AF_INET, SOCK_STREAM, 0);
+    Try<int> fd = net::socket(AF_INET, SOCK_STREAM, 0);
     if (fd.isError()) {
       return Error("Failed to create socket: " + fd.error());
     }
@@ -107,7 +108,15 @@ Try<Address> Socket::Impl::address() const
 {
   // TODO(benh): Cache this result so that we don't have to make
   // unnecessary system calls each time.
-  return network::address(get());
+
+  struct sockaddr_storage storage;
+  socklen_t length = sizeof(storage);
+
+  if (::getsockname(s, (struct sockaddr*) &storage, &length) < 0) {
+    return ErrnoError("Failed to getsockname");
+  }
+
+  return Address::create(storage);
 }
 
 
@@ -115,19 +124,36 @@ Try<Address> Socket::Impl::peer() const
 {
   // TODO(benh): Cache this result so that we don't have to make
   // unnecessary system calls each time.
-  return network::peer(get());
+
+  struct sockaddr_storage storage;
+  socklen_t length = sizeof(storage);
+
+  if (::getpeername(s, (struct sockaddr*) &storage, &length) < 0) {
+    return ErrnoError("Failed to getpeername");
+  }
+
+  return Address::create(storage);
 }
 
 
 Try<Address> Socket::Impl::bind(const Address& address)
 {
-  Try<int> bind = network::bind(get(), address);
-  if (bind.isError()) {
-    return Error(bind.error());
+  struct sockaddr_storage storage =
+    net::createSockaddrStorage(address.ip, address.port);
+
+  int error = ::bind(s, (struct sockaddr*) &storage, address.size());
+  if (error < 0) {
+    return ErrnoError();
   }
 
   // Lookup and store assigned IP and assigned port.
-  return network::address(get());
+  socklen_t length = sizeof(storage);
+
+  if (::getsockname(s, (struct sockaddr*) &storage, &length) < 0) {
+    return ErrnoError("Failed to getsockname");
+  }
+
+  return Address::create(storage);
 }
 
 

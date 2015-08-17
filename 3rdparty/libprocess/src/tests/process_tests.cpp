@@ -38,7 +38,6 @@
 #include <process/gc.hpp>
 #include <process/gmock.hpp>
 #include <process/gtest.hpp>
-#include <process/network.hpp>
 #include <process/owned.hpp>
 #include <process/process.hpp>
 #include <process/run.hpp>

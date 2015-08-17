@@ -44,7 +44,6 @@ nobase_include_HEADERS =		\
   process/metrics/timer.hpp		\
   process/mime.hpp			\
   process/mutex.hpp			\
-  process/network.hpp			\
   process/once.hpp			\
   process/owned.hpp			\
   process/pid.hpp			\

@@ -15,7 +15,6 @@
 #include <netinet/tcp.h>
 
 #include <process/io.hpp>
-#include <process/network.hpp>
 #include <process/socket.hpp>
 
 #include "config.hpp"
@@ -45,12 +44,14 @@ namespace internal {
 
 Future<Socket> accept(int fd)
 {
-  Try<int> accepted = network::accept(fd);
-  if (accepted.isError()) {
-    return Failure(accepted.error());
+  struct sockaddr_storage storage;
+  socklen_t length = sizeof(storage);
+
+  int s = ::accept(fd, (struct sockaddr*) &storage, &length);
+  if (s < 0) {
+    return Failure(ErrnoError("Failed to accept"));
   }
 
-  int s = accepted.get();
   Try<Nothing> nonblock = os::nonblock(s);
   if (nonblock.isError()) {
     LOG_IF(INFO, VLOG_IS_ON(1)) << "Failed to accept, nonblock: "
@@ -69,7 +70,7 @@ Future<Socket> accept(int fd)
 
   // Turn off Nagle (TCP_NODELAY) so pipelined requests don't wait.
   int on = 1;
-  if (setsockopt(s, SOL_TCP, TCP_NODELAY, &on, sizeof(on)) < 0) {
+  if (::setsockopt(s, SOL_TCP, TCP_NODELAY, &on, sizeof(on)) < 0) {
     const char* error = strerror(errno);
     VLOG(1) << "Failed to turn off the Nagle algorithm: " << error;
     os::close(s);
@@ -89,8 +90,8 @@ Future<Socket> accept(int fd)
 
 Future<Socket> PollSocketImpl::accept()
 {
-  return io::poll(get(), io::READ)
-    .then(lambda::bind(&internal::accept, get()));
+  return io::poll(s, io::READ)
+    .then(lambda::bind(&internal::accept, s));
 }
 
 
@@ -103,7 +104,7 @@ Future<Nothing> connect(const Socket& socket)
   socklen_t optlen = sizeof(opt);
   int s = socket.get();
 
-  if (getsockopt(s, SOL_SOCKET, SO_ERROR, &opt, &optlen) < 0 || opt != 0) {
+  if (::getsockopt(s, SOL_SOCKET, SO_ERROR, &opt, &optlen) < 0 || opt != 0) {
     // Connect failure.
     VLOG(1) << "Socket error while connecting";
     return Failure("Socket error while connecting");
@@ -117,14 +118,17 @@ Future<Nothing> connect(const Socket& socket)
 
 Future<Nothing> PollSocketImpl::connect(const Address& address)
 {
-  Try<int> connect = network::connect(get(), address);
-  if (connect.isError()) {
+  struct sockaddr_storage storage =
+    net::createSockaddrStorage(address.ip, address.port);
+
+  int error = ::connect(s, (struct sockaddr*) &storage, address.size());
+
+  if (error < 0) {
     if (errno == EINPROGRESS) {
-      return io::poll(get(), io::WRITE)
+      return io::poll(s, io::WRITE)
         .then(lambda::bind(&internal::connect, socket()));
     }
-
-    return Failure(connect.error());
+    return Failure(ErrnoError());
   }
 
   return Nothing();
@@ -133,7 +137,7 @@ Future<Nothing> PollSocketImpl::connect(const Address& address)
 
 Future<size_t> PollSocketImpl::recv(char* data, size_t size)
 {
-  return io::read(get(), data, size);
+  return io::read(s, data, size);
 }
 
 
@@ -215,15 +219,15 @@ Future<size_t> socket_send_file(int s, int fd, off_t offset, size_t size)
 
 Future<size_t> PollSocketImpl::send(const char* data, size_t size)
 {
-  return io::poll(get(), io::WRITE)
-    .then(lambda::bind(&internal::socket_send_data, get(), data, size));
+  return io::poll(s, io::WRITE)
+    .then(lambda::bind(&internal::socket_send_data, s, data, size));
 }
 
 
 Future<size_t> PollSocketImpl::sendfile(int fd, off_t offset, size_t size)
 {
-  return io::poll(get(), io::WRITE)
-    .then(lambda::bind(&internal::socket_send_file, get(), fd, offset, size));
+  return io::poll(s, io::WRITE)
+    .then(lambda::bind(&internal::socket_send_file, s, fd, offset, size));
 }
 
 } // namespace network {
