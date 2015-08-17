@@ -178,17 +178,11 @@ TEST_F(OsTest, Nonblock)
   int pipes[2];
   ASSERT_NE(-1, pipe(pipes));
 
-  Try<bool> isNonBlock = false;
-
-  isNonBlock = os::isNonblock(pipes[0]);
-  ASSERT_SOME(isNonBlock);
-  EXPECT_FALSE(isNonBlock.get());
-
   ASSERT_SOME(os::nonblock(pipes[0]));
 
-  isNonBlock = os::isNonblock(pipes[0]);
-  ASSERT_SOME(isNonBlock);
-  EXPECT_TRUE(isNonBlock.get());
+  char data[256];
+  EXPECT_EQ(-1, os::read(pipes[0], data, 256));
+  EXPECT_TRUE(errno == EAGAIN || errno == EWOULDBLOCK);
 
   close(pipes[0]);
   close(pipes[1]);

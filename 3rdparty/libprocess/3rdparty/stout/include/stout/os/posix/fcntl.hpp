@@ -69,18 +69,6 @@ inline Try<Nothing> nonblock(int fd)
   return Nothing();
 }
 
-
-inline Try<bool> isNonblock(int fd)
-{
-  int flags = ::fcntl(fd, F_GETFL);
-
-  if (flags == -1) {
-    return ErrnoError();
-  }
-
-  return (flags & O_NONBLOCK) != 0;
-}
-
 } // namespace os {
 
 #endif // __STOUT_OS_POSIX_FCNTL_HPP__
