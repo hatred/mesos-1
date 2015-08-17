@@ -58,19 +58,10 @@ TEST(IOTest, Read)
 {
   ASSERT_TRUE(GTEST_IS_THREADSAFE);
 
-  int pipes[2];
+  int pipes[2] = {-1, -1};
   char data[3];
 
-  // Create a blocking pipe.
-  ASSERT_NE(-1, ::pipe(pipes));
-
-  // Test on a blocking file descriptor.
-  AWAIT_EXPECT_FAILED(io::read(pipes[0], data, 3));
-
-  ASSERT_SOME(os::close(pipes[0]));
-  ASSERT_SOME(os::close(pipes[1]));
-
-  // Test on a closed file descriptor.
+  // Test on an invalid file descriptor.
   AWAIT_EXPECT_FAILED(io::read(pipes[0], data, 3));
 
   // Create a nonblocking pipe.
@@ -179,18 +170,9 @@ TEST(IOTest, Write)
 {
   ASSERT_TRUE(GTEST_IS_THREADSAFE);
 
-  int pipes[2];
+  int pipes[2] = {-1, -1};
 
-  // Create a blocking pipe.
-  ASSERT_NE(-1, ::pipe(pipes));
-
-  // Test on a blocking file descriptor.
-  AWAIT_EXPECT_FAILED(io::write(pipes[1], (void*) "hi", 2));
-
-  ASSERT_SOME(os::close(pipes[0]));
-  ASSERT_SOME(os::close(pipes[1]));
-
-  // Test on a closed file descriptor.
+  // Test on an invalid file descriptor.
   AWAIT_EXPECT_FAILED(io::write(pipes[1], (void*) "hi", 2));
 
   // Create a nonblocking pipe.

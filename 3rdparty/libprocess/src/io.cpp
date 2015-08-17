@@ -182,21 +182,39 @@ Future<size_t> read(int fd, void* data, size_t size)
 {
   process::initialize();
 
-  std::shared_ptr<Promise<size_t>> promise(new Promise<size_t>());
-
-  // Check the file descriptor.
-  Try<bool> nonblock = os::isNonblock(fd);
-  if (nonblock.isError()) {
-    // The file descriptor is not valid (e.g., has been closed).
-    promise->fail(
-        "Failed to check if file descriptor was non-blocking: " +
-        nonblock.error());
-    return promise->future();
-  } else if (!nonblock.get()) {
-    // The file descriptor is not non-blocking.
-    promise->fail("Expected a non-blocking file descriptor");
-    return promise->future();
+  // Get our own copy of the file descriptor so that we're in control
+  // of the lifetime and don't crash if/when someone by accidently
+  // closes the file descriptor before discarding this future. We can
+  // also make sure it's non-blocking and will close-on-exec. Start by
+  // checking we've got a "valid" file descriptor before dup'ing.
+  if (fd < 0) {
+    return Failure(strerror(EBADF));
   }
+
+  fd = ::dup(fd);
+  if (fd == -1) {
+    return Failure(ErrnoError("Failed to duplicate file descriptor"));
+  }
+
+  // Set the close-on-exec flag.
+  Try<Nothing> cloexec = os::cloexec(fd);
+  if (cloexec.isError()) {
+    os::close(fd);
+    return Failure(
+        "Failed to set close-on-exec on duplicated file descriptor: " +
+        cloexec.error());
+  }
+
+  // Make the file descriptor is non-blocking.
+  Try<Nothing> nonblock = os::nonblock(fd);
+  if (nonblock.isError()) {
+    os::close(fd);
+    return Failure(
+        "Failed to make duplicated file descriptor non-blocking: " +
+        nonblock.error());
+  }
+
+  std::shared_ptr<Promise<size_t>> promise(new Promise<size_t>());
 
   // Because the file descriptor is non-blocking, we call read()
   // immediately. The read may in turn call poll if necessary,
@@ -207,7 +225,8 @@ Future<size_t> read(int fd, void* data, size_t size)
   // writing this comment).
   internal::read(fd, data, size, promise, io::READ);
 
-  return promise->future();
+  return promise->future()
+    .onAny(lambda::bind(&os::close, fd));
 }
 
 
@@ -215,21 +234,39 @@ Future<size_t> write(int fd, void* data, size_t size)
 {
   process::initialize();
 
-  std::shared_ptr<Promise<size_t>> promise(new Promise<size_t>());
-
-  // Check the file descriptor.
-  Try<bool> nonblock = os::isNonblock(fd);
-  if (nonblock.isError()) {
-    // The file descriptor is not valid (e.g., has been closed).
-    promise->fail(
-        "Failed to check if file descriptor was non-blocking: " +
-        nonblock.error());
-    return promise->future();
-  } else if (!nonblock.get()) {
-    // The file descriptor is not non-blocking.
-    promise->fail("Expected a non-blocking file descriptor");
-    return promise->future();
+  // Get our own copy of the file descriptor so that we're in control
+  // of the lifetime and don't crash if/when someone by accidently
+  // closes the file descriptor before discarding this future. We can
+  // also make sure it's non-blocking and will close-on-exec. Start by
+  // checking we've got a "valid" file descriptor before dup'ing.
+  if (fd < 0) {
+    return Failure(strerror(EBADF));
   }
+
+  fd = ::dup(fd);
+  if (fd == -1) {
+    return Failure(ErrnoError("Failed to duplicate file descriptor"));
+  }
+
+  // Set the close-on-exec flag.
+  Try<Nothing> cloexec = os::cloexec(fd);
+  if (cloexec.isError()) {
+    os::close(fd);
+    return Failure(
+        "Failed to set close-on-exec on duplicated file descriptor: " +
+        cloexec.error());
+  }
+
+  // Make the file descriptor is non-blocking.
+  Try<Nothing> nonblock = os::nonblock(fd);
+  if (nonblock.isError()) {
+    os::close(fd);
+    return Failure(
+        "Failed to make duplicated file descriptor non-blocking: " +
+        nonblock.error());
+  }
+
+  std::shared_ptr<Promise<size_t>> promise(new Promise<size_t>());
 
   // Because the file descriptor is non-blocking, we call write()
   // immediately. The write may in turn call poll if necessary,
@@ -240,7 +277,8 @@ Future<size_t> write(int fd, void* data, size_t size)
   // writing this comment).
   internal::write(fd, data, size, promise, io::WRITE);
 
-  return promise->future();
+  return promise->future()
+    .onAny(lambda::bind(&os::close, fd));
 }
 
 
@@ -358,7 +396,7 @@ Future<string> read(int fd)
     return Failure(strerror(EBADF));
   }
 
-  fd = dup(fd);
+  fd = ::dup(fd);
   if (fd == -1) {
     return Failure(ErrnoError("Failed to duplicate file descriptor"));
   }
@@ -404,7 +442,7 @@ Future<Nothing> write(int fd, const std::string& data)
     return Failure(strerror(EBADF));
   }
 
-  fd = dup(fd);
+  fd = ::dup(fd);
   if (fd == -1) {
     return Failure(ErrnoError("Failed to duplicate file descriptor"));
   }
@@ -450,7 +488,7 @@ Future<Nothing> redirect(int from, Option<int> to, size_t chunk)
     to = open.get();
   } else {
     // Duplicate 'to' so that we're in control of its lifetime.
-    int fd = dup(to.get());
+    int fd = ::dup(to.get());
     if (fd == -1) {
       return Failure(ErrnoError("Failed to duplicate 'to' file descriptor"));
     }
@@ -461,7 +499,7 @@ Future<Nothing> redirect(int from, Option<int> to, size_t chunk)
   CHECK_SOME(to);
 
   // Duplicate 'from' so that we're in control of its lifetime.
-  from = dup(from);
+  from = ::dup(from);
   if (from == -1) {
     return Failure(ErrnoError("Failed to duplicate 'from' file descriptor"));
   }
