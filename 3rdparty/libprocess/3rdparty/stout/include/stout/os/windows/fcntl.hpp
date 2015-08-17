@@ -15,33 +15,85 @@
 #ifndef __STOUT_OS_WINDOWS_FCNTL_HPP__
 #define __STOUT_OS_WINDOWS_FCNTL_HPP__
 
+#include <stout/error.hpp>
 #include <stout/nothing.hpp>
 #include <stout/try.hpp>
 
+#include <stout/windows/net.hpp>
 
 namespace os {
 
 inline Try<Nothing> cloexec(int fd)
 {
-  UNIMPLEMENTED;
+  // NOTE: net::socket just returns the SOCKET rather than a file
+  // descriptor via '_open_osfhandle' so we only need '_get_osfhandle'
+  // if it's not a socket (e.g., file or pipe).
+  HANDLE handle = fd;
+
+  if (!net::isSocket(fd)) {
+    handle = (HANDLE) _get_osfhandle(fd);
+    if (handle == INVALID_HANDLE_VALUE) {
+      return Error(strerror(EBADF));
+    }
+  }
+
+  DWORD type = GetFileType(handle);
+
+  // Character files like console cannot be made non-inheritable.
+  if (type != FILE_TYPE_CHAR) {
+    return Nothing();
+  }
+
+  if (SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) == 0) {
+    return WindowsError();
+  }
+
+  return Nothing();
 }
 
 
 inline Try<bool> isCloexec(int fd)
 {
-  UNIMPLEMENTED;
+  // NOTE: net::socket just returns the SOCKET rather than a file
+  // descriptor via '_open_osfhandle' so we only need '_get_osfhandle'
+  // if it's not a socket (e.g., file or pipe).
+  HANDLE handle = fd;
+
+  if (!net::isSocket(fd)) {
+    handle = (HANDLE) _get_osfhandle(fd);
+    if (handle == INVALID_HANDLE_VALUE) {
+      return Error(strerror(EBADF));
+    }
+  }
+
+  DWORD flags;
+
+  if (GetHandleInformation(handle, &flags) == 0) {
+    return WindowsError();
+  }
+
+  if ((flags & HANDLE_FLAG_INHERIT) != 0) {
+    return false;
+  }
+
+  return true;
 }
 
 
 inline Try<Nothing> nonblock(int fd)
 {
-  UNIMPLEMENTED;
-}
+  if (net::isSocket(fd)) {
+    SOCKET s = fd;
+    u_long argp = 1;
+    if (ioctlsocket(s, FIONBIO, &argp) == SOCKET_ERROR) {
+      return WSAError();
+    }
+  }
 
+  // TODO(benh): Handle non-blocking for pipes by using
+  // 'SetNamedPipeHandleState'.
 
-inline Try<bool> isNonblock(int fd)
-{
-  UNIMPLEMENTED;
+  return Nothing();
 }
 
 } // namespace os {
