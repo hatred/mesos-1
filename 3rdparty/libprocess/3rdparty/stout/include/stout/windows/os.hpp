@@ -56,7 +56,11 @@ inline void setenv(const std::string& key,
                    const std::string& value,
                    bool overwrite = true)
 {
-  UNIMPLEMENTED;
+  if (!overwrite && ::getenv(key.c_str()) != NULL) {
+    return;
+  }
+
+  SetEnvironmentVariable(key.c_str(), value.c_str());
 }
 
 
@@ -64,7 +68,7 @@ inline void setenv(const std::string& key,
 // environment variables.
 inline void unsetenv(const std::string& key)
 {
-  UNIMPLEMENTED;
+  SetEnvironmentVariable(key.c_str(), NULL);
 }
 
 
