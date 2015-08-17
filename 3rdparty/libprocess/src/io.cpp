@@ -191,10 +191,14 @@ Future<size_t> read(int fd, void* data, size_t size)
     return Failure(strerror(EBADF));
   }
 
-  fd = ::dup(fd);
-  if (fd == -1) {
+  Try<int> dup = os::dup(fd);
+  if (dup.isError()) {
+    return Failure("Failed to duplicate file descriptor: " + dup.error());
+  } else if (dup.get() == -1) {
     return Failure(ErrnoError("Failed to duplicate file descriptor"));
   }
+
+  fd = dup.get();
 
   // Set the close-on-exec flag.
   Try<Nothing> cloexec = os::cloexec(fd);
@@ -243,10 +247,14 @@ Future<size_t> write(int fd, void* data, size_t size)
     return Failure(strerror(EBADF));
   }
 
-  fd = ::dup(fd);
-  if (fd == -1) {
+  Try<int> dup = os::dup(fd);
+  if (dup.isError()) {
+    return Failure("Failed to duplicate file descriptor: " + dup.error());
+  } else if (dup.get() == -1) {
     return Failure(ErrnoError("Failed to duplicate file descriptor"));
   }
+
+  fd = dup.get();
 
   // Set the close-on-exec flag.
   Try<Nothing> cloexec = os::cloexec(fd);
@@ -396,10 +404,14 @@ Future<string> read(int fd)
     return Failure(strerror(EBADF));
   }
 
-  fd = ::dup(fd);
-  if (fd == -1) {
+  Try<int> dup = os::dup(fd);
+  if (dup.isError()) {
+    return Failure("Failed to duplicate file descriptor: " + dup.error());
+  } else if (dup.get() == -1) {
     return Failure(ErrnoError("Failed to duplicate file descriptor"));
   }
+
+  fd = dup.get();
 
   // Set the close-on-exec flag.
   Try<Nothing> cloexec = os::cloexec(fd);
@@ -442,10 +454,14 @@ Future<Nothing> write(int fd, const std::string& data)
     return Failure(strerror(EBADF));
   }
 
-  fd = ::dup(fd);
-  if (fd == -1) {
+  Try<int> dup = os::dup(fd);
+  if (dup.isError()) {
+    return Failure("Failed to duplicate file descriptor: " + dup.error());
+  } else if (dup.get() == -1) {
     return Failure(ErrnoError("Failed to duplicate file descriptor"));
   }
+
+  fd = dup.get();
 
   // Set the close-on-exec flag.
   Try<Nothing> cloexec = os::cloexec(fd);
@@ -488,21 +504,29 @@ Future<Nothing> redirect(int from, Option<int> to, size_t chunk)
     to = open.get();
   } else {
     // Duplicate 'to' so that we're in control of its lifetime.
-    int fd = ::dup(to.get());
-    if (fd == -1) {
+    Try<int> dup = os::dup(to.get());
+    if (dup.isError()) {
+      return Failure(
+          "Failed to duplicate 'to' file descriptor: " + dup.error());
+    } else if (dup.get() == -1) {
       return Failure(ErrnoError("Failed to duplicate 'to' file descriptor"));
     }
 
-    to = fd;
+    to = dup.get();
   }
 
   CHECK_SOME(to);
 
   // Duplicate 'from' so that we're in control of its lifetime.
-  from = ::dup(from);
-  if (from == -1) {
+  Try<int> dup = os::dup(from);
+  if (dup.isError()) {
+    return Failure(
+        "Failed to duplicate 'from' file descriptor: " + dup.error());
+  } else if (dup.get() == -1) {
     return Failure(ErrnoError("Failed to duplicate 'from' file descriptor"));
   }
+
+  from = dup.get();
 
   // Set the close-on-exec flag (no-op if already set).
   Try<Nothing> cloexec = os::cloexec(from);
