@@ -74,6 +74,7 @@
 #include <stout/unreachable.hpp>
 #include <stout/version.hpp>
 
+#include <stout/os/dup.hpp>
 #include <stout/os/fork.hpp>
 #include <stout/os/killtree.hpp>
 #include <stout/os/ls.hpp>
