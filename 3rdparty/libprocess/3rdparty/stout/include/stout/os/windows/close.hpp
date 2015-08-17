@@ -18,12 +18,20 @@
 #include <stout/nothing.hpp>
 #include <stout/try.hpp>
 
+#include <stout/windows/net.hpp>
 
 namespace os {
 
 inline Try<Nothing> close(int fd)
 {
-  UNIMPLEMENTED;
+  if (isSocket(fd)) {
+    SOCKET s = fd;
+    ::closesocket(s);
+  } else {
+    ::close(fd);
+  }
+
+  return Nothing();
 }
 
 } // namespace os {
