@@ -21,6 +21,10 @@
 
 #include <stout/lambda.hpp>
 
+#ifdef __WINDOWS__
+#include <stout/windows/.hpp>
+#endif // __WINDOWS__
+
 #include "libev.hpp"
 
 namespace process {
@@ -134,6 +138,16 @@ Future<short> poll(int fd, short events)
 Future<short> poll(int fd, short events)
 {
   process::initialize();
+
+#ifdef __WINDOWS__
+  // On Windows we can only poll sockets, and thus we consider
+  // everything else to be "readable/writable" immediately. The
+  // downside here is that if a pipe really isn't ready we'll spin
+  // threads indefinitely until there is data in that pipe.
+  if (!net::isSocket(fd)) {
+    return events;
+  }
+#endif // __WINDOWS__
 
   // TODO(benh): Check if the file descriptor is non-blocking?
 

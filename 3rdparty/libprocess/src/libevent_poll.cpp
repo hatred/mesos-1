@@ -18,6 +18,10 @@
 #include <process/io.hpp>
 #include <process/process.hpp> // For process::initialize.
 
+#ifdef __WINDOWS__
+#include <stout/windows/.hpp>
+#endif // __WINDOWS__
+
 #include "libevent.hpp"
 
 namespace process {
@@ -63,6 +67,16 @@ void pollDiscard(event* ev)
 Future<short> poll(int fd, short events)
 {
   process::initialize();
+
+#ifdef __WINDOWS__
+  // On Windows we can only poll sockets, and thus we consider
+  // everything else to be "readable/writable" immediately. The
+  // downside here is that if a pipe really isn't ready we'll spin
+  // threads indefinitely until there is data in that pipe.
+  if (!net::isSocket(fd)) {
+    return events;
+  }
+#endif // __WINDOWS__
 
   internal::Poll* poll = new internal::Poll();
 
