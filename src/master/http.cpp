@@ -442,7 +442,49 @@ Future<Response> Master::Http::api(
       // NOTE: No `body` expected to be passed along.
       request_.keepAlive = request.keepAlive;
       request_.client = request.client;
-      return flags(request_, principal);
+      return flags(request_, principal)
+        .then([&request_](Response response) {
+            // Bail if this wasn't successful.
+            if (response.code != http::Status::OK) {
+              return response;
+            }
+
+            // Now we need to convert to a v1::master::Response.
+            v1::master::Response v1Response;
+            v1Response.set_type(FLAGS);
+
+            v1::master::Response::Flags* flags = v1Response.mutable_flags();
+
+            Try<JSON::Object> object = JSON::parse(response.body);
+
+            CHECK_SOME(object); // TODO(benh): Fail instead?
+
+            foreachpair (const string& key,
+                         const JSON::Value& value,
+                         object.get()) {
+              v1::master::Response::Flags::Flag* flag = flags->add_flags();
+              flag->set_name(key);
+              CHECK(value.is<JSON::String>()); // TODO(benh): Fail instead?
+              flag->set_value(value.as<JSON::String>().value);
+            }
+
+            if (request_.acceptsMediaType(APPLICATION_JSON)) {
+              // TODO(benh): Protect against a lowercase
+              // 'content-type' or mixed case 'Content-type'?
+              response.headers["Content-Type"] = ContentType::JSON;
+              response.body = jsonify(v1Response);
+            } else if (request_.acceptsMediaType(APPLICATION_PROTOBUF)) {
+              // TODO(benh): Implement me!
+              return NotImplemented();
+            } else {
+              return NotAcceptable(
+                  string("Expecting 'Accept' to allow ") +
+                  "'" + APPLICATION_PROTOBUF + "' or '" +
+                  APPLICATION_JSON + "'");
+            }
+
+            return response;
+        });
 
     case v1::master::Call::GET_VERSION:
       return NotImplemented();
@@ -622,9 +664,10 @@ Future<Response> Master::Http::scheduler(
   }
 
   if (call.type() == scheduler::Call::SUBSCRIBE) {
-    // We default to JSON since an empty 'Accept' header
-    // results in all media types considered acceptable.
-    ContentType responseContentType;
+    // We default to JSON 'Content-Type' in the response since an
+    // empty 'Accept' header results in all media types considered
+    // acceptable.
+    ContentType responseContentType = ContentType::JSON;
 
     if (request.acceptsMediaType(APPLICATION_JSON)) {
       responseContentType = ContentType::JSON;
