@@ -1980,6 +1980,7 @@ endif
 mesos_tests_SOURCES =						\
   slave/qos_controllers/load.cpp				\
   tests/anonymous_tests.cpp					\
+  tests/api_tests.cpp						\
   tests/attributes_tests.cpp					\
   tests/authentication_tests.cpp				\
   tests/authorization_tests.cpp					\

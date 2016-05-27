@@ -412,6 +412,16 @@ Future<Response> Master::Http::api(
   // for details.
 
 
+  // Construct a generic URL that can be reused in subsequent requests
+  // below based on the request URL but without the '/api/v1' in the
+  // `path`.
+  string path = request.url.path;
+  path = strings::trim(path, "/" + strings::WHITESPACE, strings::SUFFIX);
+  path = strings::remove(path, "/api/v1", strings::SUFFIX);
+
+  URL url = request.url;
+  url.path = path;
+
   switch (call.type()) {
     case v1::master::Call::UNKNOWN:
       return NotImplemented();
@@ -420,7 +430,19 @@ Future<Response> Master::Http::api(
       return NotImplemented();
 
     case v1::master::Call::GET_FLAGS:
-      return NotImplemented();
+      // Construct the proper URL for '/flags' endpoint.
+      // TODO(benh): Does this need to be '/master/flags'?
+      URL url_ = url;
+      url_.path = path::join(url_, "/flags");
+
+      Request request_;
+      request_.method = "GET";
+      request_.url = url_;
+      request_.headers = request.headers;
+      // NOTE: No `body` expected to be passed along.
+      request_.keepAlive = request.keepAlive;
+      request_.client = request.client;
+      return flags(request_, principal);
 
     case v1::master::Call::GET_VERSION:
       return NotImplemented();
