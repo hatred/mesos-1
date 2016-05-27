@@ -50,6 +50,20 @@ static bool invalidCharacter(char c)
 }
 
 
+namespace master {
+namespace call {
+
+Option<Error> validate(
+    const mesos::v1::master::Call& call,
+    const Option<string>& principal)
+{
+  // TODO(benh): Implement me!
+  return Error("Not implemented");
+}
+
+} // namespace call {
+} // namespace master {
+
 namespace scheduler {
 namespace call {
 

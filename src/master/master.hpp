@@ -1081,6 +1081,11 @@ private:
     // desired request handler to get consistent request logging.
     static void log(const process::http::Request& request);
 
+    // /api/v1
+    process::Future<process::http::Response> api(
+        const process::http::Request& request,
+        const Option<std::string>& principal) const;
+
     // /api/v1/scheduler
     process::Future<process::http::Response> scheduler(
         const process::http::Request& request,
@@ -1184,6 +1189,7 @@ private:
         const process::http::Request& request,
         const Option<std::string>& principal) const;
 
+    static std::string API_HELP();
     static std::string SCHEDULER_HELP();
     static std::string FLAGS_HELP();
     static std::string FRAMEWORKS_HELP();

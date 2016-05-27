@@ -24,6 +24,9 @@
 
 #include <mesos/scheduler/scheduler.hpp>
 
+// TODO(benh): Create 'mesos/v1/master.hpp' instead?
+#include <mesos/v1/master.pb.h> // ONLY USEFUL AFTER RUNNING PROTOC.
+
 #include <stout/error.hpp>
 #include <stout/option.hpp>
 
@@ -38,10 +41,22 @@ struct Slave;
 
 namespace validation {
 
+namespace master {
+namespace call {
+
+// Validates that a master:Call is well-formed.
+// TODO(bmahler): Add unit tests.
+Option<Error> validate(
+    const mesos::v1::master::Call& call,
+    const Option<std::string>& principal = None());
+
+} // namespace call {
+} // namespace master {
+
 namespace scheduler {
 namespace call {
 
-// Validates that a scheduler call is well-formed.
+// Validates that a scheduler::Call is well-formed.
 // TODO(bmahler): Add unit tests.
 Option<Error> validate(
     const mesos::scheduler::Call& call,
