@@ -1114,7 +1114,7 @@ TEST_F(MesosContainerizerTest, ROOT_CGROUPS_LaunchNestedParentExit)
 
   ExecutorInfo executor = CREATE_EXECUTOR_INFO(
       "executor",
-      "read -u " + stringify(pipes[0]));
+      "read key <&" + stringify(pipes[0]));
 
   executor.mutable_resources()->CopyFrom(Resources::parse("cpus:1").get());
 
