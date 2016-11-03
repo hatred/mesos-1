@@ -30,7 +30,7 @@ using process::Owned;
 using process::ResponseDecoder;
 using process::StreamingResponseDecoder;
 
-using process::network::Socket;
+using process::network::inet::Socket;
 
 using std::deque;
 using std::string;
