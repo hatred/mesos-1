@@ -34,8 +34,6 @@ using process::StreamingResponseDecoder;
 
 using process::http::Request;
 
-using process::network::Socket;
-
 using std::deque;
 using std::string;
 

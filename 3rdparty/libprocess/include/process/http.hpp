@@ -30,6 +30,7 @@
 #include <process/future.hpp>
 #include <process/owned.hpp>
 #include <process/pid.hpp>
+#include <process/socket.hpp>
 
 #include <stout/error.hpp>
 #include <stout/hashmap.hpp>
@@ -49,12 +50,7 @@ namespace process {
 template <typename T>
 class Future;
 
-namespace network {
-class Socket;
-} // namespace network {
-
 namespace http {
-
 namespace authentication {
 
 class Authenticator;
@@ -853,7 +849,7 @@ public:
   bool operator!=(const Connection& c) const { return !(*this == c); }
 
 private:
-  Connection(const network::Socket& s);
+  Connection(const network::inet::Socket& s);
   friend Future<Connection> connect(const URL&);
 
   // Forward declaration.
