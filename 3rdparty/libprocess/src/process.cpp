@@ -1003,7 +1003,7 @@ bool initialize(
 
   Clock::initialize(lambda::bind(&timedout, lambda::_1));
 
-  __address__ = Address::LOCALHOST_ANY();
+  __address__ = Address::ANY_ANY;
 
   // Check environment for ip.
   Option<string> value = os::getenv("LIBPROCESS_IP");
@@ -1250,7 +1250,7 @@ void finalize()
   // Clear the public address of the server socket.
   // NOTE: This variable is necessary for process communication, so it
   // cannot be cleared until after the `ProcessManager` is deleted.
-  __address__ = Address::LOCALHOST_ANY();
+  __address__ = Address::ANY_ANY;
 }
 
 
