@@ -276,7 +276,7 @@ struct Request
 
   // For server requests, this contains the address of the client.
   // Note that this may correspond to a proxy or load balancer address.
-  network::inet::Address client;
+  Option<network::Address> client;
 
   /**
    * Returns whether the encoding is considered acceptable in the
