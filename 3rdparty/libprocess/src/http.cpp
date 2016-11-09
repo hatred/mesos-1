@@ -31,6 +31,7 @@
 #include <tuple>
 #include <vector>
 
+#include <process/collect.hpp>
 #include <process/defer.hpp>
 #include <process/dispatch.hpp>
 #include <process/future.hpp>
@@ -39,6 +40,7 @@
 #include <process/owned.hpp>
 #include <process/process.hpp>
 #include <process/socket.hpp>
+#include <process/queue.hpp>
 
 #include <stout/foreach.hpp>
 #include <stout/ip.hpp>
@@ -52,6 +54,7 @@
 #include <stout/try.hpp>
 
 #include "decoder.hpp"
+#include "encoder.hpp"
 
 using std::deque;
 using std::istringstream;
@@ -1024,7 +1027,7 @@ Future<Response> convert(const Response& pipeResponse)
 class ConnectionProcess : public Process<ConnectionProcess>
 {
 public:
-  ConnectionProcess(const Socket& _socket)
+  ConnectionProcess(const network::Socket& _socket)
     : ProcessBase(ID::generate("__http_connection__")),
       socket(_socket),
       sendChain(Nothing()),
@@ -1061,7 +1064,7 @@ public:
 
     // We must chain the calls to Socket::send as it
     // otherwise interleaves data across calls.
-    Socket socket_ = socket;
+    network::Socket socket_ = socket;
 
     sendChain = sendChain
       .then([socket_, request]() {
@@ -1084,7 +1087,8 @@ public:
 
   Future<Nothing> disconnect(const Option<string>& message = None())
   {
-    Try<Nothing> shutdown = socket.shutdown();
+    Try<Nothing> shutdown = socket.shutdown(
+        network::Socket::Shutdown::READ_WRITE);
 
     disconnection.set(Nothing());
 
@@ -1233,7 +1237,7 @@ private:
     read();
   }
 
-  Socket socket;
+  network::Socket socket;
   StreamingResponseDecoder decoder;
   Future<Nothing> sendChain;
   Promise<Nothing> disconnection;
@@ -1262,7 +1266,7 @@ struct Connection::Data
   // on within a different execution context. More generally,
   // we should be passing Process ownership to libprocess to
   // ensure all interaction with a Process occurs through a PID.
-  Data(const Socket& s)
+  Data(const network::Socket& s)
     : process(spawn(new internal::ConnectionProcess(s), true)) {}
 
   ~Data()
@@ -1279,7 +1283,7 @@ struct Connection::Data
 };
 
 
-Connection::Connection(const Socket& s)
+Connection::Connection(const network::Socket& s)
   : data(std::make_shared<Connection::Data>(s)) {}
 
 
@@ -1312,6 +1316,26 @@ Future<Nothing> Connection::disconnected()
 }
 
 
+Future<Connection> connect(const network::Address& address)
+{
+  // TODO(benh): Support SSL as well!
+  Try<std::shared_ptr<SocketImpl>> impl = SocketImpl::create(
+      address.family(),
+      SocketImpl::Kind::POLL);
+
+  if (impl.isError()) {
+    return Failure("Failed to create socket implementation: " + impl.error());
+  }
+
+  network::Socket socket = network::Socket(impl.get());
+
+  return socket.connect(address)
+    .then([socket]() {
+      return Connection(socket);
+    });
+}
+
+
 Future<Connection> connect(const URL& url)
 {
   // TODO(bmahler): Move address resolution into the URL class?
@@ -1340,15 +1364,20 @@ Future<Connection> connect(const URL& url)
 
   address.port = url.port.get();
 
-  Try<Socket> socket = [&url]() -> Try<Socket> {
+  Try<std::shared_ptr<SocketImpl>> impl = [&url, &address]()
+    -> Try<std::shared_ptr<SocketImpl>> {
     // Default to 'http' if no scheme was specified.
     if (url.scheme.isNone() || url.scheme == string("http")) {
-      return Socket::create(SocketImpl::Kind::POLL);
+      return SocketImpl::create(
+          network::Address::Family::INET,
+          SocketImpl::Kind::POLL);
     }
 
     if (url.scheme == string("https")) {
 #ifdef USE_SSL_SOCKET
-      return Socket::create(SocketImpl::Kind::SSL);
+      return SocketImpl::create(
+          network::Address::Family::INET,
+          SocketImpl::Kind::SSL);
 #else
       return Error("'https' scheme requires SSL enabled");
 #endif
@@ -1357,15 +1386,458 @@ Future<Connection> connect(const URL& url)
     return Error("Unsupported URL scheme");
   }();
 
-  if (socket.isError()) {
-    return Failure("Failed to create socket: " + socket.error());
+  if (impl.isError()) {
+    return Failure("Failed to create socket implementation: " + impl.error());
   }
 
-  return socket->connect(address)
+  network::Socket socket = network::Socket(impl.get());
+
+  return socket.connect(address)
     .then([socket]() {
-      return Connection(socket.get());
+      return Connection(socket);
     });
 }
+
+
+namespace internal {
+
+Future<Nothing> send(const network::Socket& socket, Encoder* encoder)
+{
+  size_t* size = new size_t();
+  return [=]() {
+    switch (encoder->kind()) {
+      case Encoder::DATA: {
+        const char* data = static_cast<DataEncoder*>(encoder)->next(size);
+        return socket.send(data, *size);
+      }
+      case Encoder::FILE: {
+        off_t offset = 0;
+        int fd = static_cast<FileEncoder*>(encoder)->next(&offset, size);
+        return socket.sendfile(fd, offset, *size);
+      }
+    }
+  }()
+  .then([=](size_t length) -> Future<Nothing> {
+    // Update the encoder with the amount sent.
+    encoder->backup(*size - length);
+
+    // See if there is any more of the message to send.
+    if (encoder->remaining() != 0) {
+      return send(socket, encoder);
+    }
+
+    return Nothing();
+  })
+  .onAny([=]() {
+    delete size;
+  });
+}
+
+
+Future<Nothing> send(
+    const network::Socket& socket,
+    Response response, // TODO(benh): Don't take this as a copy!
+    Request* request)
+{
+  CHECK(response.type != Response::PATH &&
+        response.type != Response::PIPE);
+
+  Encoder* encoder = new HttpResponseEncoder(response, *request);
+
+  return send(socket, encoder)
+    .onAny([=]() {
+      delete encoder;
+    });
+}
+
+
+Future<Nothing> sendfile(
+    const network::Socket& socket,
+    Response response, // TODO(benh): Don't take this as a copy!
+    Request* request)
+{
+  CHECK(response.type == Response::PATH);
+
+  // Make sure no body is sent (this is really an error and
+  // should be reported and no response sent.
+  response.body.clear();
+
+  int fd = open(response.path.c_str(), O_RDONLY);
+  if (fd < 0) {
+    const string body =
+      "Failed to open '" + response.path + "': " + os::strerror(errno);
+    // TODO(benh): VLOG(1)?
+    // TODO(benh): Don't send error back as part of InternalServiceError?
+    // TODO(benh): Copy headers from `response`?
+    return send(socket, InternalServerError(body), request);
+  }
+
+  struct stat s; // Need 'struct' because of function named 'stat'.
+  if (fstat(fd, &s) != 0) {
+    const string body =
+      "Failed to fstat '" + response.path + "': " + os::strerror(errno);
+    // TODO(benh): VLOG(1)?
+    // TODO(benh): Don't send error back as part of InternalServiceError?
+    // TODO(benh): Copy headers from `response`?
+    return send(socket, InternalServerError(body), request);
+  } else if (S_ISDIR(s.st_mode)) {
+    const string body = "'" + response.path + "' is a directory";
+    // TODO(benh): VLOG(1)?
+    // TODO(benh): Don't send error back as part of InternalServiceError?
+    // TODO(benh): Copy headers from `response`?
+    return send(socket, InternalServerError(body), request);
+  }
+
+  // While the user is expected to properly set a 'Content-Type'
+  // header, we'll fill in (or overwrite) 'Content-Length' header.
+  response.headers["Content-Length"] = stringify(s.st_size);
+
+  // TODO(benh): If this is a TCP socket consider turning on TCP_CORK
+  // for both sends and then turning it off.
+  Encoder* encoder = new HttpResponseEncoder(response, *request);
+
+  return send(socket, encoder)
+    .onAny([=]() {
+      delete encoder;
+    })
+    .then([=]() mutable {
+        // NOTE: the file descriptor gets closed by FileEncoder.
+      encoder = new FileEncoder(fd, s.st_size);
+      return send(socket, encoder)
+        .onAny([=]() {
+          delete encoder;
+        });
+    });
+}
+
+
+Future<Nothing> stream(
+    const network::Socket& socket,
+    http::Pipe::Reader reader)
+{
+  return reader.read()
+    .then([=](const string& data) mutable {
+      bool finished = false;
+
+      ostringstream out;
+
+      if (data.empty()) {
+        // Finished reading.
+        out << "0\r\n" << "\r\n";
+        finished = true;
+      } else {
+        out << std::hex << data.size() << "\r\n";
+        out << data;
+        out << "\r\n";
+      }
+
+      Encoder* encoder = new DataEncoder(out.str());
+
+      return send(socket, encoder)
+        .onAny([=]() {
+          delete encoder;
+        })
+        .then([=]() mutable -> Future<Nothing> {
+          if (!finished) {
+            return stream(socket, reader);
+          }
+
+          reader.close();
+
+          return Nothing();
+        });
+    });
+}
+
+
+Future<Nothing> stream(
+    const network::Socket& socket,
+    Response response, // TODO(benh): Don't take this as a copy!
+    Request* request)
+{
+  CHECK(response.type == Response::PIPE);
+
+  // Make sure no body is sent (this is really an error and
+  // should be reported and no response sent).
+  response.body.clear();
+
+  if (response.reader.isNone()) {
+    // TODO(benh): Consider returning a Failure instead. This
+    // situation is definitely a bug in the users code (they asked us
+    // to stream but they didn't give us a pipe), but it's pretty
+    // harsh to shut down the entire connection, so instead we just
+    // don't send any data!
+    response.type = Response::NONE;
+    return send(socket, response, request);
+  }
+
+  // While the user is expected to properly set a 'Content-Type'
+  // header, we'll fill in (or overwrite) 'Transfer-Encoding' header.
+  response.headers["Transfer-Encoding"] = "chunked";
+
+  Encoder* encoder = new HttpResponseEncoder(response, *request);
+
+  return send(socket, encoder)
+    .onAny([=]() {
+      delete encoder;
+    })
+    .then([=]() {
+      return stream(socket, response.reader.get());
+    });
+}
+
+
+void send(
+    network::Socket socket,
+    Queue<Option<std::tuple<Future<Response>, Request*>>> responses,
+    Owned<Promise<Nothing>> promise)
+{
+  responses.get()
+    .then([=](const Option<std::tuple<Future<Response>, Request*>>& t)
+          mutable -> Future<bool> {
+      if (t.isNone()) {
+        return false;
+      }
+      Future<Response> response = std::get<0>(t.get());
+      Request* request = std::get<1>(t.get());
+      return response
+        // TODO(benh):
+        // .recover([]() {
+        //   return InternalServerError("Discarded response");
+        // })
+        .repair([](const Future<Response>& response) {
+          // TODO(benh): Is this severe enough that we should close
+          // the connection?
+          return InternalServerError(response.failure());
+        })
+        .then([=](const Response& response) {
+          // TODO(benh): Should any generated InternalServerError
+          // responses due to bugs in the Response passed to us cause
+          // us to return a Failure here rather than keep processing
+          // more requests/responses?
+          return [&]() {
+            if (response.type == Response::PATH) {
+              return sendfile(socket, response, request);
+            } else if (response.type == Response::PIPE) {
+              return stream(socket, response, request);
+            } else {
+              return send(socket, response, request);
+            }
+          }()
+          .then([=]() {
+            bool persist = request->keepAlive;
+
+            // Don't persist the connection if the headers include
+            // 'Connection: close'.
+            if (response.headers.contains("Connection")) {
+              if (response.headers.get("Connection").get() == "close") {
+                persist = false;
+              }
+            }
+
+            return persist;
+          });
+        })
+        .onAny([=]() {
+          delete request;
+        });
+    })
+    // TODO(benh):
+    // .onDiscarded([=](const Future<bool>& ) {
+    // })
+    .onReady([=](bool persist) mutable {
+      if (persist) {
+        // TODO(benh): This will grow the stack indefinitely
+        // because the compiler can't optimize this tail call
+        // recursion so we do it ourselves by doing a `defer` for
+        // now. To get the best of both worlds we could also
+        // implement an iterative solution that continues
+        // executing until we need to block and only then doing a
+        // `defer`.
+        //
+        std::function<void()>(defer([=]() {
+          send(socket, responses, promise);
+        }))();
+      } else {
+        // Shutdown the socket for reading since the connection is
+        // not meant to be persistent (e.g., the last response had
+        // 'Connection: close').
+        //
+        // This also will cause the `receive` loop to exit because
+        // the call to `Socket::recv` will return EOF.
+        //
+        // Note that we don't look at the return value of
+        // `Socket::shutdown` because the socket might already be
+        // shutdown!
+        socket.shutdown(network::Socket::Shutdown::READ);
+
+        promise->set(Nothing());
+      }
+    })
+    .onFailed([=](const string& message) {
+      promise->fail(message);
+    });
+}
+
+
+void receive(
+    const network::Socket& socket,
+    const network::Address& address,
+    const std::function<Future<Response>(const Request&)>&& f,
+    char* data,
+    const size_t size,
+    DataDecoder* decoder,
+    Queue<Option<std::tuple<Future<Response>, Request*>>> responses,
+    Owned<Promise<Nothing>> promise)
+{
+  //
+  // ITERATIVE SOLUTION SINCE WE DO NOT HAVE TAIL CALL OPTIMIZATION!
+  //
+  // Future<size_t> length = socket.recv(data, size);
+
+  // while (length.isReady()) {
+  //   if (length.get() == 0) {
+  //     return Nothing();
+  //   }
+
+  //   Option<Error> error = decode(s, address, f, data, length.get(), decoder);
+  //   if (error.isSome()) {
+  //     return Failure(error.get());
+  //   }
+
+  //   length = socket.recv(data, size);
+  // }
+
+  // return length
+  //   .then([=](size_t length) {
+  //     Option<Error> error = decode(s, address, f, data, length, decoder);
+  //     if (error.isSome()) {
+  //       return Failure(error.get());
+  //     }
+  //     return receive(s, address, std::move(f), data, size, decoder);
+  //   });
+
+  socket.recv(data, size)
+    .then([=](size_t length) mutable -> Future<bool> {
+      if (length == 0) {
+        return true;
+      }
+
+      // Decode as much of the data as possible into HTTP requests.
+      const deque<Request*> requests = decoder->decode(data, length);
+
+      if (requests.empty() && decoder->failed()) {
+        return Failure("Decoder error while receiving");
+      }
+
+      // Even if the decoder failed there were some requests that we
+      // can start to process and it's possible that some of those
+      // requests can be completely satisifed so we'll wait to return
+      // a `Failure` until the next time we call and there are no
+      // requests.
+
+      foreach (Request* request, requests) {
+        request->client = address;
+        // TODO(benh): To support pipelining of requests invoke `f`
+        // even before a response has been completed for the previous
+        // request. To simplify the handling of requests we could
+        // offload this decision to the caller via something like
+        // `ServeOptions`.
+        responses.put(Some(std::make_tuple(f(*request), request)));
+      }
+
+      return false;
+    })
+    // TODO(benh):
+    // .onDiscarded([=](const Future<bool>& ) {
+    // })
+    .onReady([=](bool eof) {
+      if (!eof) {
+        std::function<void()>(defer([=]() {
+          receive(socket,
+                  address,
+                  std::move(f),
+                  data,
+                  size,
+                  decoder,
+                  responses,
+                  promise);
+        }))();
+      } else {
+        promise->set(Nothing());
+      }
+    })
+    .onFailed([=](const string& message) {
+      promise->fail(message);
+    });
+}
+
+
+Future<Nothing> serve(
+    const network::Socket& socket,
+    const std::function<Future<Response>(const Request&)>&& f)
+{
+  // Get the peer address to augment any requests we receive.
+  Try<network::Address> address = socket.peer();
+
+  if (address.isError()) {
+    return Failure("Failed to get peer address: " + address.error());
+  }
+
+  const size_t size = 80 * 1024;
+  char* data = new char[size];
+
+  DataDecoder* decoder = new DataDecoder();
+
+  Queue<Option<std::tuple<Future<Response>, Request*>>> responses;
+
+  Owned<Promise<Nothing>> promise1(new Promise<Nothing>());
+  Owned<Promise<Nothing>> promise2(new Promise<Nothing>());
+
+  Future<Nothing> future1 = promise1->future();
+  Future<Nothing> future2 = promise2->future();
+
+  receive(
+      socket,
+      address.get(),
+      std::move(f),
+      data,
+      size,
+      decoder,
+      responses,
+      promise1);
+
+  promise1->future()
+    .onReady([=]() mutable {
+      responses.put(None());
+    })
+    .onFailed([=]() mutable {
+      responses.put(None());
+    });
+    // TODO(benh):
+    // .onDiscarded([]() {
+    //   ???
+    // });
+
+  send(socket, responses, promise2);
+
+  // TODO(benh):
+  // promise2->future()
+  // .onFailed([=]() {
+  //     socket.shutdown(READ_WRITE);
+  //   });
+
+  return collect(future1, future2)
+    .then([]() {
+      return Nothing();
+    })
+    .onAny([=]() {
+      delete[] data;
+      delete decoder;
+    });
+}
+
+} // namespace internal {
 
 
 Request createRequest(

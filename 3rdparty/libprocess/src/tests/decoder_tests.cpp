@@ -17,7 +17,6 @@
 
 #include <process/gtest.hpp>
 #include <process/owned.hpp>
-#include <process/socket.hpp>
 
 #include <stout/gtest.hpp>
 
@@ -53,6 +52,7 @@ TYPED_TEST_CASE(RequestDecoderTest, RequestDecoderTypes);
 
 TYPED_TEST(RequestDecoderTest, Request)
 {
+<<<<<<< 29e9a9ff8bbcf293c7a315c0a19aeaeed3f37b74
   TypeParam decoder;
 
   const string data =

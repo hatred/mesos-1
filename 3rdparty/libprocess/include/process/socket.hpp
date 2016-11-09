@@ -176,11 +176,9 @@ public:
    * Shutdown the receive-side of the socket. No further data can be
    * received from the socket.
    */
-  // TODO(neilc): Change this to allow the caller to specify `how`.
-  // See MESOS-5658.
-  virtual Try<Nothing> shutdown()
+  virtual Try<Nothing> shutdown(int how)
   {
-    if (::shutdown(s, SHUT_RD) < 0) {
+    if (::shutdown(s, how) < 0) {
       return ErrnoError();
     }
 
@@ -389,12 +387,32 @@ public:
     return impl->send(data);
   }
 
-  Try<Nothing> shutdown()
+  enum class Shutdown
   {
-    return impl->shutdown();
+    READ,
+    WRITE,
+    READ_WRITE
+  };
+
+  Try<Nothing> shutdown(Shutdown shutdown = Shutdown::READ)
+  {
+    int how = [=]() {
+      switch (shutdown) {
+        case Shutdown::READ: return SHUT_RD;
+        case Shutdown::WRITE: return SHUT_WR;
+        case Shutdown::READ_WRITE: return SHUT_RDWR;
+      }
+    }();
+
+    return impl->shutdown(how);
   }
 
-private:
+  operator Socket<Address>() const
+  {
+    return Socket<Address>(impl);
+  }
+
+// private:
   explicit Socket(std::shared_ptr<SocketImpl>&& that) : impl(std::move(that)) {}
 
   explicit Socket(const std::shared_ptr<SocketImpl>& that) : impl(that) {}
