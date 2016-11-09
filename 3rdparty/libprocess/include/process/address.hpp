@@ -242,6 +242,13 @@ template <typename AddressType>
 Try<AddressType> convert(Try<Address>&& address);
 
 
+template <>
+inline Try<Address> convert(Try<Address>&& address)
+{
+  return address;
+}
+
+
 #ifndef __WINDOWS__
 template <>
 inline Try<unix::Address> convert(Try<Address>&& address)

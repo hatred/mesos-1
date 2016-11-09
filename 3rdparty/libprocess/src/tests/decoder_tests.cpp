@@ -16,7 +16,6 @@
 #include <string>
 
 #include <process/owned.hpp>
-#include <process/socket.hpp>
 
 #include <stout/gtest.hpp>
 
@@ -30,16 +29,12 @@ using process::Owned;
 using process::ResponseDecoder;
 using process::StreamingResponseDecoder;
 
-using process::network::inet::Socket;
-
 using std::deque;
 using std::string;
 
 TEST(DecoderTest, Request)
 {
-  Try<Socket> socket = Socket::create();
-  ASSERT_SOME(socket);
-  DataDecoder decoder = DataDecoder(socket.get());
+  DataDecoder decoder = DataDecoder();
 
   const string data =
     "GET /path/file.json?key1=value1&key2=value2#fragment HTTP/1.1\r\n"
@@ -73,9 +68,7 @@ TEST(DecoderTest, Request)
 
 TEST(DecoderTest, RequestHeaderContinuation)
 {
-  Try<Socket> socket = Socket::create();
-  ASSERT_SOME(socket);
-  DataDecoder decoder = DataDecoder(socket.get());
+  DataDecoder decoder = DataDecoder();
 
   const string data =
     "GET /path/file.json HTTP/1.1\r\n"
@@ -97,9 +90,7 @@ TEST(DecoderTest, RequestHeaderContinuation)
 
 TEST(DecoderTest, RequestHeaderCaseInsensitive)
 {
-  Try<Socket> socket = Socket::create();
-  ASSERT_SOME(socket);
-  DataDecoder decoder = DataDecoder(socket.get());
+  DataDecoder decoder = DataDecoder();
 
   const string data =
     "GET /path/file.json HTTP/1.1\r\n"

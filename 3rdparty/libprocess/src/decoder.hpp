@@ -42,8 +42,8 @@ namespace process {
 class DataDecoder
 {
 public:
-  explicit DataDecoder(const network::inet::Socket& _s)
-    : s(_s), failure(false), request(nullptr)
+  explicit DataDecoder()
+    : failure(false), request(nullptr)
   {
     settings.on_message_begin = &DataDecoder::on_message_begin;
     settings.on_url = &DataDecoder::on_url;
@@ -90,11 +90,6 @@ public:
   bool failed() const
   {
     return failure;
-  }
-
-  network::inet::Socket socket() const
-  {
-    return s;
   }
 
 private:
@@ -258,8 +253,6 @@ private:
     decoder->request = nullptr;
     return 0;
   }
-
-  const network::inet::Socket s; // The socket this decoder is associated with.
 
   bool failure;
 

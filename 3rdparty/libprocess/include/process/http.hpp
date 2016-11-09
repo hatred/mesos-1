@@ -815,7 +815,8 @@ public:
   bool operator!=(const Connection& c) const { return !(*this == c); }
 
 private:
-  Connection(const network::inet::Socket& s);
+  Connection(const network::Socket& s);
+  friend Future<Connection> connect(const network::Address& address);
   friend Future<Connection> connect(const URL&);
 
   // Forward declaration.
@@ -825,7 +826,29 @@ private:
 };
 
 
+Future<Connection> connect(const network::Address& address);
+
+
 Future<Connection> connect(const URL& url);
+
+
+namespace internal {
+
+Future<Nothing> serve(
+    const network::Socket& s,
+    const std::function<Future<Response>(const Request&)>&& f);
+
+} // namespace internal {
+
+
+// Returns Nothing after the socket has been closed or a response with
+// the header 'Connection: close' was sent or a Failure if receiving
+// requests on the socket or sending responses on the socket failed.
+template <typename F>
+Future<Nothing> serve(const network::Socket& s, F&& f)
+{
+  return internal::serve(s, std::function<Future<Response>(const Request&)>(f));
+}
 
 
 // Create a http Request from the specified parameters.
