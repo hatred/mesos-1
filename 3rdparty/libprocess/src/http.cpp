@@ -1128,7 +1128,7 @@ protected:
   }
 
 private:
-  static Future<Nothing> _send(Socket socket, Pipe::Reader reader)
+  static Future<Nothing> _send(network::Socket socket, Pipe::Reader reader)
   {
     return reader.read()
       .then([socket, reader](const string& data) mutable -> Future<Nothing> {
@@ -1500,7 +1500,7 @@ Future<Nothing> sendfile(
     .onAny([=]() {
       delete encoder;
     })
-    .then([=]() mutable {
+    .then([=]() mutable -> Future<Nothing> {
         // NOTE: the file descriptor gets closed by FileEncoder.
       encoder = new FileEncoder(fd, s.st_size);
       return send(socket, encoder)
